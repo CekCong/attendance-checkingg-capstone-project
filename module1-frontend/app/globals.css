@@ -1,0 +1,235 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: var(--font-syne), ui-sans-serif, sans-serif;
+  --font-sans: var(--font-manrope), ui-sans-serif, sans-serif;
+}
+
+html.dark {
+  color-scheme: dark;
+  --foreground: #f8fafc;
+  --muted: rgba(248, 250, 252, 0.72);
+  --card: rgba(6, 10, 22, 0.72);
+  --card-border: rgba(255, 255, 255, 0.12);
+  --btn: #f8fafc;
+  --btn-ink: #020617;
+}
+
+html.light {
+  color-scheme: light;
+  --foreground: #0f172a;
+  --muted: #475569;
+  --card: rgba(255, 255, 255, 0.86);
+  --card-border: rgba(15, 23, 42, 0.12);
+  --btn: #0f172a;
+  --btn-ink: #f8fafc;
+}
+
+@layer utilities {
+  .animate-fade-up {
+    animation: fade-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .animate-aurora {
+    animation: aurora-drift 18s ease-in-out infinite;
+  }
+
+  .animate-pulse-soft {
+    animation: pulse-soft 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes aurora-drift {
+  0% {
+    transform: translate3d(-4%, -2%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(5%, 3%, 0) scale(1.08);
+  }
+  100% {
+    transform: translate3d(-4%, -2%, 0) scale(1);
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+html {
+  background-color: #020617;
+}
+
+html.light {
+  background-color: #f1f5f9;
+}
+
+body {
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  background: transparent;
+}
+
+.aurora-layer {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+html.dark .aurora-layer {
+  background-image: radial-gradient(900px 700px at 8% -8%, #1e3a8a44, transparent 55%),
+    radial-gradient(800px 600px at 92% 8%, #0f766e33, transparent 52%),
+    linear-gradient(165deg, #020617 0%, #07111f 55%, #0b1224 100%);
+}
+
+html.light .aurora-layer {
+  background-image: radial-gradient(1000px 700px at 8% -10%, #bae6fd, transparent 55%),
+    radial-gradient(900px 600px at 95% 0%, #d1fae5, transparent 52%),
+    linear-gradient(165deg, #f8fafc 0%, #eef2f7 55%, #e8eef5 100%);
+}
+
+.aurora-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(60px);
+  animation: aurora-drift 16s ease-in-out infinite;
+}
+
+html.dark .aurora-blob {
+  opacity: 0.28;
+  mix-blend-mode: screen;
+}
+
+html.light .aurora-blob {
+  opacity: 0.45;
+  mix-blend-mode: multiply;
+}
+
+.aurora-blob:nth-child(1) {
+  top: -10%;
+  left: -5%;
+  width: 55vw;
+  height: 55vw;
+  max-width: 520px;
+  max-height: 520px;
+  background: #2dd4bf;
+}
+
+.aurora-blob:nth-child(2) {
+  top: 20%;
+  right: -10%;
+  width: 50vw;
+  height: 50vw;
+  max-width: 480px;
+  max-height: 480px;
+  background: #38bdf8;
+  animation-duration: 22s;
+  animation-direction: reverse;
+}
+
+.aurora-blob:nth-child(3) {
+  bottom: -15%;
+  left: 25%;
+  width: 60vw;
+  height: 60vw;
+  max-width: 560px;
+  max-height: 560px;
+  background: #6ee7b7;
+  animation-duration: 20s;
+}
+
+html.light .text-white {
+  color: #0f172a !important;
+}
+html.light .text-white\/90 {
+  color: rgb(15 23 42 / 0.92) !important;
+}
+html.light .text-white\/85 {
+  color: rgb(15 23 42 / 0.86) !important;
+}
+html.light .text-white\/80 {
+  color: rgb(15 23 42 / 0.8) !important;
+}
+html.light .text-white\/75 {
+  color: rgb(15 23 42 / 0.74) !important;
+}
+html.light .text-white\/70 {
+  color: rgb(15 23 42 / 0.7) !important;
+}
+html.light .text-white\/65 {
+  color: rgb(15 23 42 / 0.65) !important;
+}
+html.light .text-white\/60 {
+  color: rgb(15 23 42 / 0.6) !important;
+}
+html.light .text-white\/55 {
+  color: rgb(15 23 42 / 0.55) !important;
+}
+html.light .placeholder\:text-white\/40::placeholder {
+  color: rgb(15 23 42 / 0.4) !important;
+}
+
+html.light .border-white\/10,
+html.light .border-white\/15,
+html.light .border-white\/20,
+html.light .border-white\/25,
+html.light .border-white\/30,
+html.light .border-white\/40,
+html.light .border-white\/50 {
+  border-color: rgb(15 23 42 / 0.14) !important;
+}
+
+html.light .bg-white\/10,
+html.light .bg-white\/15,
+html.light .bg-white\/20 {
+  background-color: rgb(255 255 255 / 0.72) !important;
+}
+
+html.light .hover\:bg-white\/15:hover,
+html.light .hover\:bg-white\/20:hover {
+  background-color: rgb(241 245 249 / 0.95) !important;
+}
+
+html.light button.bg-white\/90,
+html.light a.bg-white\/90 {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+}
+
+html.light .bg-sky-950\/40,
+html.light .bg-sky-950\/70,
+html.light .bg-sky-950\/80 {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+html.light select {
+  color: #0f172a;
+}
