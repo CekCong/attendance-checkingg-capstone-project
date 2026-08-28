@@ -2,7 +2,7 @@
 
 ## NTU Computer Science Capstone Project - Student Package
 
-Welcome to the SAIV capstone project! Your team will build a secure, privacy-preserving attendance system resistant to deepfakes, replay attacks, and remote sign-ins.
+Welcome to the SAIV capstone project! The goal is to build a secure, privacy-preserving attendance system resistant to deepfakes, replay attacks, and remote sign-ins.
 
 ---
 
@@ -15,16 +15,11 @@ Welcome to the SAIV capstone project! Your team will build a secure, privacy-pre
 - ML integration (pre-trained face recognition models)
 - DevOps (Docker, observability)
 
-### Project Scope
-- **Duration**: 12-14 weeks
-- **Team Size**: 4 students (1 per module)
-- **Grading**: 130 points total (90 public + 40 hidden)
-
 ---
 
 ## Architecture
 
-Your team will implement 4 modules:
+4 modules:
 
 ### Module 1: Student Frontend PWA
 **Recommended Tech Stack**: React/Next.js, TypeScript, WebRTC
