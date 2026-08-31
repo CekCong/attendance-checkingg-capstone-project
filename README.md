@@ -1,8 +1,8 @@
 # SAIV - Secure Attendance & Identity Verification
 
-## NTU Computer Science Capstone Project - Student Package
+## NTU Computer Science Capstone Project
 
-Welcome to the SAIV capstone project! The goal is to build a secure, privacy-preserving attendance system resistant to deepfakes, replay attacks, and remote sign-ins.
+Welcome to our capstone project! The goal is to build a secure, privacy-preserving attendance system resistant to deepfakes, replay attacks, and remote sign-ins.
 
 ---
 
@@ -184,7 +184,7 @@ Some packages require system-level dependencies:
 
 ## Grading Breakdown
 
-### Public Tests (90 points) - Available to you
+### Public Tests (90 points) 
 
 | Test File | Points | Description |
 |-----------|--------|-------------|
@@ -197,7 +197,7 @@ Some packages require system-level dependencies:
 | test_performance.py | 5 | Latency, concurrent users |
 | test_integration.py | 4 | End-to-end check-in flow |
 
-### Hidden Tests (40 points) - Revealed during grading
+### Hidden Tests (40 points) 
 
 | Category | Points | Description |
 |----------|--------|-------------|
@@ -310,10 +310,3 @@ Avoid these mistakes:
 
 ---
 
-## Questions?
-
-- Review the API specification and database schema
-- Run the public tests to understand requirements
-- Check the skeleton code for implementation hints
-
-Good luck with your capstone project!
