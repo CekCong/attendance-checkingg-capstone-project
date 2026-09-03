@@ -36,34 +36,12 @@ def get_arcface_model():
     return arcface_model
 
 
-def extract_face_embedding(image_array, detection):
+def extract_face_embedding(image_array, _detection):
+    """Extract a normalized ArcFace embedding from an RGB image."""
     arcface_model = get_arcface_model()
 
-    image_height, image_width = image_array.shape[:2]
-    bbox = detection["bounding_box"]
-
-    # MediaPipe use relative coordinates, so we need to convert them to absolute pixel values
-    x1 = int(bbox["x_min"] * image_width)
-    y1 = int(bbox["y_min"] * image_height)
-    x2 = int((bbox["x_min"] + bbox["width"]) * image_width)
-    y2 = int((bbox["y_min"] + bbox["height"]) * image_height)
-
-    x1 = max(0, min(x1, image_width))
-    y1 = max(0, min(y1, image_height))
-    x2 = max(0, min(image_width, x2))
-    y2 = max(0, min(image_height, y2))
-
-    if x1 >= x2 or y1 >= y2:
-        return None
-
-    face_crop = image_array[y1:y2, x1:x2]
-
-    if face_crop.size == 0:
-        return None
-
-    # PIL decoding produces RGB arrays; InsightFace expects OpenCV BGR input.
-    face_crop_bgr = cv2.cvtColor(face_crop, cv2.COLOR_RGB2BGR)
-    faces = arcface_model.get(face_crop_bgr)
+    image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+    faces = arcface_model.get(image_bgr)
 
     if not faces:
         return None
@@ -73,11 +51,7 @@ def extract_face_embedding(image_array, detection):
     if embedding is None:
         return None
 
-    embedding = np.asarray(
-        embedding,
-        dtype=np.float32
-    )
-
+    embedding = np.asarray(embedding, dtype=np.float32)
     norm = np.linalg.norm(embedding)
 
     if norm == 0:

@@ -2,8 +2,9 @@
 # REQUEST/RESPONSE MODELS
 # =============================================================================
 
+from typing import Any, Dict
+
 from pydantic import BaseModel
-from typing import Optional, Dict, List, Any
 
 class FaceEnrollRequest(BaseModel):
     """Request model for face enrollment."""

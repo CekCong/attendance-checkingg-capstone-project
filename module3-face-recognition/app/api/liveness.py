@@ -62,9 +62,9 @@ async def check_liveness(request: LivenessRequest):
         raise HTTPException(status_code=400, detail="Unsupported challenge type.")
 
     # 1. Decode base64 image to numpy array
-    try: 
+    try:
         image = decode_base64_image(request.challenge_response)
-    except Exception:
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid Base64 image.")
     
     # 2. Detect face using MediaPipe FaceDetection

@@ -5,7 +5,7 @@ WORKDIR /app
 ENV INSIGHTFACE_HOME=/app/.insightface
 ENV CORS_ALLOWED_ORIGINS=http://localhost:3000
 
-# Install system dependencies for OpenCV and face_recognition
+# Install system dependencies for OpenCV and InsightFace
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \

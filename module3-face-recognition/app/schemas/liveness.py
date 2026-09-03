@@ -2,13 +2,14 @@
 # REQUEST/RESPONSE MODELS
 # =============================================================================
 
+from typing import Any, Dict
+
 from pydantic import BaseModel
-from typing import Optional, Dict, List, Any
 
 class LivenessRequest(BaseModel):
     """Request model for liveness check."""
     challenge_response: str  # Base64 encoded image
-    challenge_type: str = "blink"  # blink, head_turn, passive
+    challenge_type: str = "passive"  # passive, blink, head_turn
 
 
 class LivenessResponse(BaseModel):

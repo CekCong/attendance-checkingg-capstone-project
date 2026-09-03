@@ -2,8 +2,9 @@
 # REQUEST/RESPONSE MODELS
 # =============================================================================
 
+from typing import Dict, List, Optional
+
 from pydantic import BaseModel
-from typing import Optional, Dict, List, Any
 
 class GeolocationData(BaseModel):
     """Geolocation data for risk assessment."""
