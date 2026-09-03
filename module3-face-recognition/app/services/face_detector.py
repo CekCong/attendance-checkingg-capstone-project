@@ -10,19 +10,25 @@
     Return detection results with confidence scores, bbox coordinates for qulity score calculation. 
 """
 
+import mediapipe
 import numpy as np
-import mediapipe 
+
+MIN_DETECTION_CONFIDENCE = 0.5
+MAX_DETECTED_FACES = 1
+
+
 def detect_face(image_array):
    
     if not isinstance(image_array, np.ndarray):
         raise ValueError("Input must be a numpy array.")
 
-    detector = mediapipe.solutions.face_detection.FaceDetection(min_detection_confidence=0.5)
-
-    results =  detector.process(image_array)
+    with mediapipe.solutions.face_detection.FaceDetection(
+        min_detection_confidence=MIN_DETECTION_CONFIDENCE
+    ) as detector:
+        results = detector.process(image_array)
 
     # No face detected or more than one face detected
-    if not results.detections or len(results.detections) > 1:
+    if not results.detections or len(results.detections) > MAX_DETECTED_FACES:
         return None
 
     face = results.detections[0]

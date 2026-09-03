@@ -15,14 +15,13 @@ class FaceEnrollRequest(BaseModel):
 class FaceEnrollResponse(BaseModel):
     """Response model for face enrollment."""
     enrollment_successful: bool
-    face_template_hash: str  # 64-char SHA-256 hex string
+    face_template_hash: str  # 256-bit SimHash encoded as 64 hex characters
     quality_score: float  # 0.0 to 1.0
     details: Dict[str, Any]
 
 
 class FaceVerifyRequest(BaseModel):
     """Request model for face verification."""
-    user_id: str # ADDED for Biohashing**
     image: str  # Base64 encoded image
     reference_template_hash: str  # Hash from enrollment
 

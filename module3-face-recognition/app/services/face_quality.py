@@ -16,6 +16,12 @@ Face detection confidence gets the highest importance,
 while resolution and face size provide supporting evidence.
 """
 
+BASELINE_RESOLUTION = 640 * 480
+TARGET_FACE_AREA_RATIO = 0.20
+CONFIDENCE_WEIGHT = 0.50
+RESOLUTION_WEIGHT = 0.25
+FACE_SIZE_WEIGHT = 0.25
+
 
 def calculate_quality_score(image, face_detected):
 
@@ -26,13 +32,12 @@ def calculate_quality_score(image, face_detected):
 
     # 2. Image Resolution Score (0 to 1)
     # 640x480 or higher receives the maximum score
-    baseline_resolution = 640 * 480
     image_resolution = width * height
 
-    resolution_score = min(image_resolution / baseline_resolution, 1.0)
+    resolution_score = min(image_resolution / BASELINE_RESOLUTION, 1.0)
 
     # 3. Face Size Score (0 to 1)
-    bbox = face_detected["bbox"]
+    bbox = face_detected["bounding_box"]
 
     # MediaPipe bbox width and height are relative values
     # Example: 0.4 * 0.5 = face occupies 20% of image
@@ -40,10 +45,13 @@ def calculate_quality_score(image, face_detected):
 
     # Assume a face occupying 20% of the image
     # receives the maximum face-size score
-    face_size_score = min(face_ratio / 0.20,1.0)
+    face_size_score = min(face_ratio / TARGET_FACE_AREA_RATIO, 1.0)
 
     # 4. Final quality score
-    quality_score = confidence_score * 0.50 + resolution_score * 0.25 + face_size_score * 0.25
-    
+    quality_score = (
+        confidence_score * CONFIDENCE_WEIGHT
+        + resolution_score * RESOLUTION_WEIGHT
+        + face_size_score * FACE_SIZE_WEIGHT
+    )
 
     return round(quality_score, 3)

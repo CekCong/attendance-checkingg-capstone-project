@@ -11,41 +11,59 @@
 
 # We will use ArcFace as our face recognition model for extracting embeddings.
 
+from functools import lru_cache
+import os
+
 import cv2
 import numpy as np
-from functools import lru_cache
 from insightface.app import FaceAnalysis
 
-#--------Store the model in memory to avoid reloading it for each request--------#
+ARCFACE_MODEL_NAME = "buffalo_l"
+ARCFACE_MODEL_ROOT = os.getenv("INSIGHTFACE_HOME", "~/.insightface")
+ARCFACE_PROVIDERS = ["CPUExecutionProvider"]
+ARCFACE_DETECTION_SIZE = (640, 640)
+ARCFACE_CONTEXT_ID = -1
+
+
 @lru_cache(maxsize=1)
 def get_arcface_model():
-    arcface_model = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-    arcface_model.prepare(ctx_id=0, det_size=(640, 640))
+    arcface_model = FaceAnalysis(
+        name=ARCFACE_MODEL_NAME,
+        root=ARCFACE_MODEL_ROOT,
+        providers=ARCFACE_PROVIDERS,
+    )
+    arcface_model.prepare(ctx_id=ARCFACE_CONTEXT_ID, det_size=ARCFACE_DETECTION_SIZE)
     return arcface_model
+
 
 def extract_face_embedding(image_array, detection):
     arcface_model = get_arcface_model()
 
     image_height, image_width = image_array.shape[:2]
-    bbox = detection["bbox"]
+    bbox = detection["bounding_box"]
 
-    x = int(bbox["x"])
-    y = int(bbox["y"])
-    width = int(bbox["width"])
-    height = int(bbox["height"])
+    # MediaPipe use relative coordinates, so we need to convert them to absolute pixel values
+    x1 = int(bbox["x_min"] * image_width)
+    y1 = int(bbox["y_min"] * image_height)
+    x2 = int((bbox["x_min"] + bbox["width"]) * image_width)
+    y2 = int((bbox["y_min"] + bbox["height"]) * image_height)
 
-    x1 = max(0, x)
-    y1 = max(0, y)
+    x1 = max(0, min(x1, image_width))
+    y1 = max(0, min(y1, image_height))
+    x2 = max(0, min(image_width, x2))
+    y2 = max(0, min(image_height, y2))
 
-    x2 = min(image_width, x + width)
-    y2 = min(image_height, y + height)
+    if x1 >= x2 or y1 >= y2:
+        return None
 
     face_crop = image_array[y1:y2, x1:x2]
 
     if face_crop.size == 0:
         return None
 
-    faces = arcface_model.get(face_crop)
+    # PIL decoding produces RGB arrays; InsightFace expects OpenCV BGR input.
+    face_crop_bgr = cv2.cvtColor(face_crop, cv2.COLOR_RGB2BGR)
+    faces = arcface_model.get(face_crop_bgr)
 
     if not faces:
         return None
@@ -66,4 +84,3 @@ def extract_face_embedding(image_array, detection):
         return None
 
     return embedding / norm
-   
