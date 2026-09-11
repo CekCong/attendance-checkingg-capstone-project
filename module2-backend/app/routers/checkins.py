@@ -39,6 +39,13 @@ class SessionStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 # --- SQLAlchemy Models ---
+class Course(Base):
+    __tablename__ = "courses"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code = Column(String(50), nullable=False)
+    name = Column(String(255), nullable=False)
+
 class User(Base):
     __tablename__ = "users"
 
@@ -50,7 +57,7 @@ class SessionModel(Base):
     __tablename__ = "sessions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), nullable=False)
+    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
     instructor_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     name = Column(String(255), nullable=False)
     session_type = Column(String(50), default="lecture")
@@ -71,6 +78,8 @@ class SessionModel(Base):
     risk_threshold = Column(Float, nullable=True)
     qr_code_secret = Column(String(64), nullable=True)
     qr_code_expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    course = relationship("Course", backref="sessions")
 
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
@@ -157,9 +166,62 @@ class CheckinPaginatedResponse(BaseModel):
     limit: int
     offset: int
 
+class MyCheckinItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    session_id: uuid.UUID
+    session_name: str
+    course_code: str
+    status: CheckinStatus
+    checked_in_at: datetime
+    risk_score: float
+
 # --- Router ---
 router = APIRouter(prefix="/checkins", tags=["Check-ins"])
 
+# GET /checkins/my-checkins - Get current student's check-in history
+@router.get("/my-checkins", response_model=List[MyCheckinItem], status_code=status.HTTP_200_OK)
+def get_my_checkins(
+    course_id: Optional[uuid.UUID] = Query(None, description="Filter by course"),
+    limit: int = Query(50, ge=1, le=100, description="Results per page"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.get("role") != "student":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Only students can access their check-in history."
+        )
+
+    student_id = uuid.UUID(str(current_user.get("id")))
+
+    query = (
+        db.query(AttendanceRecord)
+        .join(AttendanceRecord.session)
+        .outerjoin(SessionModel.course)
+        .filter(AttendanceRecord.student_id == student_id)
+    )
+
+    if course_id:
+        query = query.filter(SessionModel.course_id == course_id)
+
+    records = query.order_by(AttendanceRecord.checked_in_at.desc()).limit(limit).all()
+
+    return [
+        MyCheckinItem(
+            id=rec.id,
+            session_id=rec.session_id,
+            session_name=rec.session.name if rec.session else "",
+            course_code=rec.session.course.code if rec.session and rec.session.course else "",
+            status=CheckinStatus(rec.status),
+            checked_in_at=rec.checked_in_at,
+            risk_score=rec.risk_score
+        )
+        for rec in records
+    ]
+
+# GET /checkins/ - List all check-ins with filters (instructor/admin only)
 @router.get("/", response_model=CheckinPaginatedResponse, status_code=status.HTTP_200_OK)
 def list_checkins(
     session_id: Optional[uuid.UUID] = Query(None, description="Filter by session"),
@@ -227,6 +289,7 @@ def list_checkins(
         "offset": offset
     }
 
+# POST /checkins/ - Student check-in to a session
 @router.post("/", response_model=CheckinResponse, status_code=status.HTTP_201_CREATED)
 def create_checkin(
     payload: CheckinCreate,
@@ -276,7 +339,6 @@ def create_checkin(
             detail="Already checked in to this session."
         )
 
-    # Check QR Code Expirations
     if session_obj.qr_code_secret:
         if payload.qr_code != session_obj.qr_code_secret:
             raise HTTPException(
