@@ -1,6 +1,8 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { AuthUser, UserRole } from "./authTypes";
 
+type TokenUser = Pick<AuthUser, "id" | "email" | "role">;
+
 const ACCESS_TTL = "1h";
 const REFRESH_TTL = "7d";
 
@@ -10,7 +12,7 @@ function secret() {
   );
 }
 
-export async function signAccessToken(user: AuthUser): Promise<string> {
+export async function signAccessToken(user: TokenUser): Promise<string> {
   return new SignJWT({
     sub: user.id,
     email: user.email,
@@ -23,7 +25,7 @@ export async function signAccessToken(user: AuthUser): Promise<string> {
     .sign(secret());
 }
 
-export async function signRefreshToken(user: AuthUser): Promise<string> {
+export async function signRefreshToken(user: TokenUser): Promise<string> {
   return new SignJWT({
     sub: user.id,
     email: user.email,
