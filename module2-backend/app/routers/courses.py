@@ -1,9 +1,12 @@
+import uuid
 from datetime import datetime
-from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, Query, status
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Text, Boolean, Float, DateTime, func
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, ForeignKey, create_engine, func
+from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
+
+from app.security import get_current_user, require_roles
 
 # -----------------------------------------------------------------------------
 # 1. Database Setup
@@ -22,16 +25,24 @@ def get_db():
         db.close()
 
 # -----------------------------------------------------------------------------
-# 2. SQLAlchemy Model
+# 2. SQLAlchemy Models
 # -----------------------------------------------------------------------------
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String(36), primary_key=True)
+    full_name = Column(String(255), nullable=False)
+
+
 class Course(Base):
     __tablename__ = "courses"
 
-    id = Column(String(36), primary_key=True)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     code = Column(String(20), unique=True, nullable=False)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     semester = Column(String(20), nullable=False)
+    instructor_id = Column(String(36), ForeignKey("users.id"), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
     venue_latitude = Column(Float, nullable=True)
     venue_longitude = Column(Float, nullable=True)
@@ -43,19 +54,60 @@ class Course(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
+    instructor = relationship("User", backref="courses")
+
 # -----------------------------------------------------------------------------
 # 3. Pydantic Schemas
 # -----------------------------------------------------------------------------
+class CourseCreate(BaseModel):
+    code: str
+    name: str
+    description: Optional[str] = None
+    semester: str
+    instructor_id: str
+    venue_name: Optional[str] = None
+    venue_latitude: Optional[float] = None
+    venue_longitude: Optional[float] = None
+    geofence_radius_meters: Optional[float] = 100.0
+    require_face_recognition: Optional[bool] = False
+    require_device_binding: Optional[bool] = True
+    risk_threshold: Optional[float] = 0.5
+
+class CourseListItemResponse(BaseModel):
+    id: str
+    code: str
+    name: str
+    semester: str
+    instructor_id: str
+    instructor_name: str
+    venue_name: Optional[str] = None
+    venue_latitude: Optional[float] = None
+    venue_longitude: Optional[float] = None
+    geofence_radius_meters: Optional[float] = 100.0
+    risk_threshold: Optional[float] = 0.5
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class CoursePaginatedResponse(BaseModel):
+    items: List[CourseListItemResponse]
+    total: int
+    limit: int
+    offset: int
+
 class CourseResponse(BaseModel):
     id: str
     code: str
     name: str
     description: Optional[str] = None
     semester: str
+    instructor_id: str
     is_active: bool
+    venue_name: Optional[str] = None
     venue_latitude: Optional[float] = None
     venue_longitude: Optional[float] = None
-    venue_name: Optional[str] = None
     geofence_radius_meters: Optional[float] = 100.0
     require_face_recognition: Optional[bool] = False
     require_device_binding: Optional[bool] = True
@@ -71,6 +123,7 @@ class CourseUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     semester: Optional[str] = None
+    instructor_id: Optional[str] = None
     is_active: Optional[bool] = None
     venue_latitude: Optional[float] = None
     venue_longitude: Optional[float] = None
@@ -83,51 +136,145 @@ class CourseUpdate(BaseModel):
 # -----------------------------------------------------------------------------
 # 4. API Endpoints Implementation
 # -----------------------------------------------------------------------------
-app = FastAPI()
+router = APIRouter(prefix="/courses", tags=["courses"])
 
-# GET /courses - List courses
-@app.get("/courses", response_model=List[CourseResponse], status_code=status.HTTP_200_OK)
+
+# GET /courses/ - List courses with optional filters and wrapped pagination response
+@router.get("/", response_model=CoursePaginatedResponse, status_code=status.HTTP_200_OK)
 def list_courses(
-    skip: int = Query(0, ge=0, description="Pagination offset"),
-    limit: int = Query(10, ge=1, le=100, description="Pagination limit"),
-    is_active: Optional[bool] = Query(None, description="Filter active courses"),
+    is_active: Optional[bool] = Query(True, description="Filter by active status"),
     semester: Optional[str] = Query(None, description="Filter by semester"),
+    instructor_id: Optional[str] = Query(None, description="Filter by instructor (admin only)"),
+    limit: int = Query(50, ge=1, le=100, description="Results per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     query = db.query(Course)
+
     if is_active is not None:
         query = query.filter(Course.is_active == is_active)
+
     if semester:
         query = query.filter(Course.semester == semester)
-    
-    return query.offset(skip).limit(limit).all()
+
+    if instructor_id:
+        if current_user.get("role") != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Filtering by instructor_id is restricted to administrators."
+            )
+        query = query.filter(Course.instructor_id == instructor_id)
+
+    total = query.count()
+    courses = query.offset(offset).limit(limit).all()
+
+    items = [
+        CourseListItemResponse(
+            id=course.id,
+            code=course.code,
+            name=course.name,
+            semester=course.semester,
+            instructor_id=course.instructor_id,
+            instructor_name=course.instructor.full_name if course.instructor else "Unknown",
+            venue_name=course.venue_name,
+            venue_latitude=course.venue_latitude,
+            venue_longitude=course.venue_longitude,
+            geofence_radius_meters=course.geofence_radius_meters,
+            risk_threshold=course.risk_threshold,
+            is_active=course.is_active,
+            created_at=course.created_at
+        )
+        for course in courses
+    ]
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset
+    }
 
 
-# GET /courses/{id} - Course details
-@app.get("/courses/{id}", response_model=CourseResponse, status_code=status.HTTP_200_OK)
-def get_course_details(id: str, db: Session = Depends(get_db)):
-    course = db.query(Course).filter(Course.id == id).first()
+# POST /courses/ - Create a new course (Admin only)
+@router.post("/", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)
+def create_course(
+    payload: CourseCreate,
+    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+    db: Session = Depends(get_db)
+):
+    existing = db.query(Course).filter(Course.code == payload.code).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Course with code '{payload.code}' already exists."
+        )
+
+    instructor = db.query(User).filter(User.id == payload.instructor_id).first()
+    if not instructor:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Instructor with ID '{payload.instructor_id}' not found."
+        )
+
+    course = Course(**payload.model_dump())
+    db.add(course)
+
+    try:
+        db.commit()
+        db.refresh(course)
+        return course
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to create course: {str(e)}"
+        )
+
+
+# GET /courses/{course_id} - Course details (Requires auth)
+@router.get("/{course_id}", response_model=CourseResponse, status_code=status.HTTP_200_OK)
+def get_course_details(
+    course_id: str,
+    _current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Course with ID '{id}' not found."
+            detail=f"Course with ID '{course_id}' not found."
         )
     return course
 
 
-# PATCH /courses/{id} - Update course
-@app.patch("/courses/{id}", response_model=CourseResponse, status_code=status.HTTP_200_OK)
-def update_course(id: str, payload: CourseUpdate, db: Session = Depends(get_db)):
-    course = db.query(Course).filter(Course.id == id).first()
+# PUT /courses/{course_id} - Update course (Admin or Course Instructor)
+@router.put("/{course_id}", response_model=CourseResponse, status_code=status.HTTP_200_OK)
+def update_course_full_or_partial(
+    course_id: str,
+    payload: CourseUpdate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Course with ID '{id}' not found."
+            detail=f"Course with ID '{course_id}' not found."
         )
 
-    # Exclude fields that were not explicitly set in the request
+    # Permission check: must be admin or the assigned course instructor
+    is_admin = current_user.get("role") == "admin"
+    is_course_instructor = current_user.get("id") == course.instructor_id
+
+    if not (is_admin or is_course_instructor):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions. Only administrators or the assigned course instructor can update this course."
+        )
+
+    # Partial update supported via exclude_unset=True
     update_data = payload.model_dump(exclude_unset=True)
-    
     for key, value in update_data.items():
         setattr(course, key, value)
 
@@ -140,4 +287,31 @@ def update_course(id: str, payload: CourseUpdate, db: Session = Depends(get_db))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to update course: {str(e)}"
+        )
+
+
+# DELETE /courses/{course_id} - Soft-delete a course (Admin only)
+@router.delete("/{course_id}", status_code=status.HTTP_204_NO_CONTENT)
+def soft_delete_course(
+    course_id: str,
+    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+    db: Session = Depends(get_db)
+):
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Course with ID '{course_id}' not found."
+        )
+
+    course.is_active = False
+
+    try:
+        db.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to delete course: {str(e)}"
         )
