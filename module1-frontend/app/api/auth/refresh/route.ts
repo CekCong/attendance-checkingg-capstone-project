@@ -13,15 +13,11 @@ export async function POST() {
 
   try {
     const payload = await verifyToken(token, "refresh");
-    const email = String(payload.email);
-    const username = email.split("@")[0];
     const user = {
       id: String(payload.sub),
-      email,
-      username,
-      full_name: username.replace(/[._]/g, " "),
+      email: String(payload.email),
+      full_name: String(payload.email).split("@")[0],
       role: payload.role as UserRole,
-      language: "en",
     };
     const access_token = await signAccessToken(user);
     const refresh_token = await signRefreshToken(user);
