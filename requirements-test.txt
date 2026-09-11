@@ -33,7 +33,7 @@ geopy==2.4.1
 # From module3-face-recognition/requirements.txt
 # ============================================
 # Face recognition & CV
-mediapipe>=0.10.9
+mediapipe==0.10.18
 opencv-python>=4.9.0.80
 numpy>=1.24.3
 pillow>=10.2.0
