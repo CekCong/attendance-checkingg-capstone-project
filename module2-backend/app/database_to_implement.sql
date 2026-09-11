@@ -33,34 +33,53 @@ CREATE TABLE courses (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
+-- 1. Create custom ENUM type for status
+CREATE TYPE session_status AS ENUM ('scheduled', 'active', 'closed', 'cancelled');
+
+-- 2. Create the sessions table
 CREATE TABLE sessions (
-    id VARCHAR(36) PRIMARY KEY,
-    course_id VARCHAR(36) NOT NULL,
-    instructor_id VARCHAR(36) NULL,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    course_id UUID NOT NULL,
+    instructor_id UUID NULL,
     name VARCHAR(255) NOT NULL,
     session_type VARCHAR(50) DEFAULT 'lecture',
     description TEXT NULL,
-    scheduled_start TIMESTAMP NOT NULL,
-    scheduled_end TIMESTAMP NOT NULL,
-    checkin_opens_at TIMESTAMP NOT NULL,
-    checkin_closes_at TIMESTAMP NOT NULL,
-    status ENUM('scheduled', 'active', 'closed', 'cancelled') NOT NULL,
-    actual_start TIMESTAMP NULL,
-    actual_end TIMESTAMP NULL,
-    venue_latitude FLOAT NULL,
-    venue_longitude FLOAT NULL,
+    scheduled_start TIMESTAMPTZ NOT NULL,
+    scheduled_end TIMESTAMPTZ NOT NULL,
+    checkin_opens_at TIMESTAMPTZ NOT NULL,
+    checkin_closes_at TIMESTAMPTZ NOT NULL,
+    status session_status NOT NULL DEFAULT 'scheduled',
+    actual_start TIMESTAMPTZ NULL,
+    actual_end TIMESTAMPTZ NULL,
+    venue_latitude DOUBLE PRECISION NULL,
+    venue_longitude DOUBLE PRECISION NULL,
     venue_name VARCHAR(255) NULL,
-    geofence_radius_meters FLOAT NULL,
+    geofence_radius_meters DOUBLE PRECISION NULL,
     require_liveness_check BOOLEAN DEFAULT TRUE,
     require_face_match BOOLEAN DEFAULT FALSE,
-    risk_threshold FLOAT NULL,
+    risk_threshold DOUBLE PRECISION NULL,
     qr_code_secret VARCHAR(64) NULL,
-    qr_code_expires_at TIMESTAMP NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
-    FOREIGN KEY (instructor_id) REFERENCES users(id) ON DELETE SET NULL
+    qr_code_expires_at TIMESTAMPTZ NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_course FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+    CONSTRAINT fk_instructor FOREIGN KEY (instructor_id) REFERENCES users(id) ON DELETE SET NULL
 );
+
+-- 3. Trigger to emulate "ON UPDATE CURRENT_TIMESTAMP"
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+   NEW.updated_at = CURRENT_TIMESTAMP;
+   RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER update_sessions_updated_at
+BEFORE UPDATE ON sessions
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TABLE devices (
     id VARCHAR(36) PRIMARY KEY,
@@ -88,35 +107,6 @@ CREATE TABLE devices (
     revoked_at TIMESTAMP NULL,
     revocation_reason TEXT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-
-CREATE TABLE sessions (
-    id VARCHAR(36) PRIMARY KEY,
-    course_id VARCHAR(36) NOT NULL,
-    instructor_id VARCHAR(36) NULL,
-    name VARCHAR(255) NOT NULL,
-    session_type VARCHAR(50) DEFAULT 'lecture',
-    description TEXT NULL,
-    scheduled_start TIMESTAMP NOT NULL,
-    scheduled_end TIMESTAMP NOT NULL,
-    checkin_opens_at TIMESTAMP NOT NULL,
-    checkin_closes_at TIMESTAMP NOT NULL,
-    status ENUM('scheduled', 'active', 'closed', 'cancelled') NOT NULL,
-    actual_start TIMESTAMP NULL,
-    actual_end TIMESTAMP NULL,
-    venue_latitude FLOAT NULL,
-    venue_longitude FLOAT NULL,
-    venue_name VARCHAR(255) NULL,
-    geofence_radius_meters FLOAT NULL,
-    require_liveness_check BOOLEAN DEFAULT TRUE,
-    require_face_match BOOLEAN DEFAULT FALSE,
-    risk_threshold FLOAT NULL,
-    qr_code_secret VARCHAR(64) NULL,
-    qr_code_expires_at TIMESTAMP NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
-    FOREIGN KEY (instructor_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE checkins (

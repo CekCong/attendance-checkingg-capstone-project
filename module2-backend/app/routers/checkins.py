@@ -1,0 +1,364 @@
+import uuid
+import math
+from datetime import datetime, timezone
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field, ConfigDict
+from sqlalchemy import Column, String, Float, Boolean, DateTime, JSON, ForeignKey, Enum as SQLEnum, create_engine, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
+import enum
+
+from security import get_current_user
+
+# --- Database Setup ---
+DATABASE_URL = "postgresql://postgres:password@localhost:5432/postgres"
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# --- Enums ---
+class CheckinStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    flagged = "flagged"
+    rejected = "rejected"
+    appealed = "appealed"
+
+class SessionStatus(str, enum.Enum):
+    scheduled = "scheduled"
+    active = "active"
+    closed = "closed"
+    cancelled = "cancelled"
+
+# --- SQLAlchemy Models ---
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    full_name = Column(String(255), nullable=False)
+    email = Column(String(255), unique=True, nullable=False)
+
+class SessionModel(Base):
+    __tablename__ = "sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    course_id = Column(UUID(as_uuid=True), nullable=False)
+    instructor_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    name = Column(String(255), nullable=False)
+    session_type = Column(String(50), default="lecture")
+    description = Column(String, nullable=True)
+    scheduled_start = Column(DateTime(timezone=True), nullable=False)
+    scheduled_end = Column(DateTime(timezone=True), nullable=False)
+    checkin_opens_at = Column(DateTime(timezone=True), nullable=False)
+    checkin_closes_at = Column(DateTime(timezone=True), nullable=False)
+    status = Column(SQLEnum(SessionStatus, name="session_status"), nullable=False, default=SessionStatus.scheduled)
+    actual_start = Column(DateTime(timezone=True), nullable=True)
+    actual_end = Column(DateTime(timezone=True), nullable=True)
+    venue_latitude = Column(Float, nullable=True)
+    venue_longitude = Column(Float, nullable=True)
+    venue_name = Column(String(255), nullable=True)
+    geofence_radius_meters = Column(Float, nullable=True)
+    require_liveness_check = Column(Boolean, default=True)
+    require_face_match = Column(Boolean, default=False)
+    risk_threshold = Column(Float, nullable=True)
+    qr_code_secret = Column(String(64), nullable=True)
+    qr_code_expires_at = Column(DateTime(timezone=True), nullable=True)
+
+class AttendanceRecord(Base):
+    __tablename__ = "attendance_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(50), nullable=False)
+    checked_in_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    location_accuracy_meters = Column(Float, nullable=True)
+    device_fingerprint = Column(String(255), nullable=True)
+    distance_from_venue_meters = Column(Float, nullable=True)
+    liveness_passed = Column(Boolean, nullable=True)
+    liveness_score = Column(Float, nullable=True)
+    risk_score = Column(Float, nullable=False, default=0.0)
+    risk_factors = Column(JSON, nullable=True, default=list)
+
+    session = relationship("SessionModel", backref="attendance_records")
+    student = relationship("User", backref="attendance_records")
+
+# --- Helper Functions ---
+def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = (math.sin(delta_phi / 2.0) ** 2 +
+         math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    
+    return round(R * c, 2)
+
+# --- Pydantic Schemas ---
+class CheckinCreate(BaseModel):
+    session_id: uuid.UUID
+    latitude: float
+    longitude: float
+    location_accuracy_meters: float
+    device_fingerprint: str
+    liveness_challenge_response: Optional[str] = None
+    qr_code: Optional[str] = None
+
+class RiskFactor(BaseModel):
+    type: str
+    weight: float
+
+class CheckinResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    session_id: uuid.UUID
+    student_id: uuid.UUID
+    status: CheckinStatus
+    checked_in_at: datetime
+    latitude: float
+    longitude: float
+    distance_from_venue_meters: Optional[float] = None
+    liveness_passed: Optional[bool] = None
+    liveness_score: Optional[float] = None
+    risk_score: float
+    risk_factors: List[RiskFactor] = Field(default_factory=list)
+
+class CheckinListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    session_id: uuid.UUID
+    session_name: str
+    student_id: uuid.UUID
+    student_name: str
+    student_email: str
+    status: CheckinStatus
+    checked_in_at: datetime
+    distance_from_venue_meters: Optional[float] = None
+    risk_score: float
+    liveness_passed: Optional[bool] = None
+
+class CheckinPaginatedResponse(BaseModel):
+    items: List[CheckinListItem]
+    total: int
+    limit: int
+    offset: int
+
+# --- Router ---
+router = APIRouter(prefix="/checkins", tags=["Check-ins"])
+
+@router.get("/", response_model=CheckinPaginatedResponse, status_code=status.HTTP_200_OK)
+def list_checkins(
+    session_id: Optional[uuid.UUID] = Query(None, description="Filter by session"),
+    course_id: Optional[uuid.UUID] = Query(None, description="Filter by course"),
+    student_id: Optional[uuid.UUID] = Query(None, description="Filter by student"),
+    status_filter: Optional[CheckinStatus] = Query(None, alias="status", description="Filter by status"),
+    min_risk_score: Optional[float] = Query(None, description="Minimum risk score"),
+    max_risk_score: Optional[float] = Query(None, description="Maximum risk score"),
+    start_date: Optional[datetime] = Query(None, description="Check-ins after this date"),
+    end_date: Optional[datetime] = Query(None, description="Check-ins before this date"),
+    limit: int = Query(50, ge=1, le=100, description="Results per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.get("role") not in ["instructor", "admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Instructor or admin permissions required."
+        )
+
+    query = db.query(AttendanceRecord).join(AttendanceRecord.session).join(AttendanceRecord.student)
+
+    if session_id:
+        query = query.filter(AttendanceRecord.session_id == session_id)
+    if course_id:
+        query = query.filter(SessionModel.course_id == course_id)
+    if student_id:
+        query = query.filter(AttendanceRecord.student_id == student_id)
+    if status_filter:
+        query = query.filter(AttendanceRecord.status == status_filter.value)
+    if min_risk_score is not None:
+        query = query.filter(AttendanceRecord.risk_score >= min_risk_score)
+    if max_risk_score is not None:
+        query = query.filter(AttendanceRecord.risk_score <= max_risk_score)
+    if start_date:
+        query = query.filter(AttendanceRecord.checked_in_at >= start_date)
+    if end_date:
+        query = query.filter(AttendanceRecord.checked_in_at <= end_date)
+
+    total = query.count()
+    records = query.order_by(AttendanceRecord.checked_in_at.desc()).offset(offset).limit(limit).all()
+
+    items = [
+        CheckinListItem(
+            id=rec.id,
+            session_id=rec.session_id,
+            session_name=rec.session.name if rec.session else "",
+            student_id=rec.student_id,
+            student_name=rec.student.full_name if rec.student else "",
+            student_email=rec.student.email if rec.student else "",
+            status=CheckinStatus(rec.status),
+            checked_in_at=rec.checked_in_at,
+            distance_from_venue_meters=rec.distance_from_venue_meters,
+            risk_score=rec.risk_score,
+            liveness_passed=rec.liveness_passed
+        )
+        for rec in records
+    ]
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset
+    }
+
+@router.post("/", response_model=CheckinResponse, status_code=status.HTTP_201_CREATED)
+def create_checkin(
+    payload: CheckinCreate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.get("role") != "student":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Only students can perform check-ins."
+        )
+
+    student_id = uuid.UUID(str(current_user.get("id")))
+
+    session_obj = db.query(SessionModel).filter(SessionModel.id == payload.session_id).first()
+    if not session_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session with ID '{payload.session_id}' not found."
+        )
+
+    if session_obj.status != SessionStatus.active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Session is not currently active."
+        )
+
+    now = datetime.now(timezone.utc)
+
+    if now < session_obj.checkin_opens_at or now > session_obj.checkin_closes_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Check-in window is closed for this session."
+        )
+
+    existing_checkin = (
+        db.query(AttendanceRecord)
+        .filter(
+            AttendanceRecord.session_id == payload.session_id,
+            AttendanceRecord.student_id == student_id
+        )
+        .first()
+    )
+    if existing_checkin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Already checked in to this session."
+        )
+
+    # Check QR Code Expirations
+    if session_obj.qr_code_secret:
+        if payload.qr_code != session_obj.qr_code_secret:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid QR code provided for this session."
+            )
+        if session_obj.qr_code_expires_at and now > session_obj.qr_code_expires_at:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="QR code for this session has expired."
+            )
+
+    risk_factors = []
+    total_risk = 0.0
+    distance_meters = None
+    geofence_exceeded_critical = False
+
+    if session_obj.venue_latitude is not None and session_obj.venue_longitude is not None:
+        distance_meters = calculate_haversine_distance(
+            payload.latitude,
+            payload.longitude,
+            session_obj.venue_latitude,
+            session_obj.venue_longitude
+        )
+
+        max_radius = session_obj.geofence_radius_meters or 100.0
+
+        if distance_meters > (2 * max_radius):
+            geofence_exceeded_critical = True
+            risk_factors.append({"type": "critical_geofence_exceeded", "weight": 1.0})
+            total_risk += 1.0
+        elif distance_meters > max_radius:
+            risk_factors.append({"type": "out_of_geofence", "weight": 0.40})
+            total_risk += 0.40
+
+    liveness_passed = None
+    liveness_score = None
+
+    if session_obj.require_liveness_check:
+        if not payload.liveness_challenge_response:
+            liveness_passed = False
+            liveness_score = 0.0
+            risk_factors.append({"type": "liveness_failed", "weight": 1.0})
+            total_risk += 1.0
+        else:
+            liveness_passed = True
+            liveness_score = 0.92
+
+    if payload.device_fingerprint == "unknown_device":
+        risk_factors.append({"type": "device_unknown", "weight": 0.15})
+        total_risk += 0.15
+
+    total_risk = round(min(total_risk, 1.0), 2)
+
+    if liveness_passed is False or geofence_exceeded_critical:
+        checkin_status = CheckinStatus.rejected
+    else:
+        threshold = session_obj.risk_threshold or 0.50
+        if total_risk >= threshold:
+            checkin_status = CheckinStatus.flagged
+        else:
+            checkin_status = CheckinStatus.approved
+
+    new_record = AttendanceRecord(
+        id=uuid.uuid4(),
+        session_id=payload.session_id,
+        student_id=student_id,
+        status=checkin_status.value,
+        checked_in_at=now,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        location_accuracy_meters=payload.location_accuracy_meters,
+        device_fingerprint=payload.device_fingerprint,
+        distance_from_venue_meters=distance_meters,
+        liveness_passed=liveness_passed,
+        liveness_score=liveness_score,
+        risk_score=total_risk,
+        risk_factors=risk_factors
+    )
+
+    db.add(new_record)
+    db.commit()
+    db.refresh(new_record)
+
+    return new_record
