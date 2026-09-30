@@ -3,13 +3,13 @@
 # =============================================================================
 
 from typing import Any, Dict
-
 from pydantic import BaseModel
 
 class LivenessRequest(BaseModel):
     """Request model for liveness check."""
-    challenge_response: str  # Base64 encoded image
-    challenge_type: str = "passive"  # passive, blink, head_turn
+    challenge_response: str | list[str] # Base64 encoded image / image frames
+    challenge_type: str = "passive"  # passive, blink, head_turn, smile
+    reference_template_hash: str | None = None
 
 
 class LivenessResponse(BaseModel):

@@ -14,8 +14,6 @@ import mediapipe
 import numpy as np
 
 MIN_DETECTION_CONFIDENCE = 0.5
-MAX_DETECTED_FACES = 1
-
 
 def detect_face(image_array):
    
@@ -28,7 +26,7 @@ def detect_face(image_array):
         results = detector.process(image_array)
 
     # No face detected or more than one face detected
-    if not results.detections or len(results.detections) > MAX_DETECTED_FACES:
+    if not results.detections or len(results.detections) > 1:
         return None
 
     face = results.detections[0]

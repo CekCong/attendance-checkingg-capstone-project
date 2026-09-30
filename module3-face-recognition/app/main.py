@@ -1,7 +1,9 @@
 import os
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.api.face import router as face_router
 from app.api.liveness import router as liveness_router
 from app.api.risk import router as risk_router
@@ -17,6 +19,20 @@ app = FastAPI(
     description=SERVICE_DESCRIPTION,
     version=SERVICE_VERSION,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def sanitized_validation_error_handler(request, exc):
+    """Return validation errors without echoing submitted biometric data."""
+    safe_errors = [
+        {
+            "type": error.get("type", "validation_error"),
+            "loc": list(error.get("loc", ())),
+            "msg": "Invalid request value.",
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
 
 # ---------------- CORS Middleware ----------------
 allowed_origins = [
