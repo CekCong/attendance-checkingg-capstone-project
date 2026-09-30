@@ -54,6 +54,16 @@ services:
       SECRET_KEY: your-secret-key-change-in-production
       FACE_SERVICE_URL: http://face-recognition:8001
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./module2-backend/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./module2-backend/requirements.txt
+        - action: rebuild
+          path: ./module2-backend/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +82,16 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./module3-face-recognition/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "/app/app"]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./module3-face-recognition/requirements.txt
+        - action: rebuild
+          path: ./module3-face-recognition/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -93,6 +113,25 @@ services:
       PORT: "3000"
       NEXT_PUBLIC_API_URL: http://localhost:8000
       NEXT_PUBLIC_FACE_SERVICE_URL: http://localhost:8001
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./module1-frontend/app:/app/app
+      - ./module1-frontend/components:/app/components
+      - ./module1-frontend/lib:/app/lib
+      - ./module1-frontend/public:/app/public
+      - ./module1-frontend/next.config.js:/app/next.config.js
+      - ./module1-frontend/postcss.config.js:/app/postcss.config.js
+      - ./module1-frontend/tailwind.config.js:/app/tailwind.config.js
+      - ./module1-frontend/tsconfig.json:/app/tsconfig.json
+    command: ["npx", "next", "dev", "-p", "3000"]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./module1-frontend/package.json
+        - action: rebuild
+          path: ./module1-frontend/package-lock.json
+        - action: rebuild
+          path: ./module1-frontend/Dockerfile
     depends_on:
       - backend
     networks:
@@ -112,6 +151,25 @@ services:
       NEXT_PUBLIC_APP_SURFACE: instructor
       PORT: "8501"
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./module1-frontend/app:/app/app
+      - ./module1-frontend/components:/app/components
+      - ./module1-frontend/lib:/app/lib
+      - ./module1-frontend/public:/app/public
+      - ./module1-frontend/next.config.js:/app/next.config.js
+      - ./module1-frontend/postcss.config.js:/app/postcss.config.js
+      - ./module1-frontend/tailwind.config.js:/app/tailwind.config.js
+      - ./module1-frontend/tsconfig.json:/app/tsconfig.json
+    command: ["npx", "next", "dev", "-p", "8501"]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./module1-frontend/package.json
+        - action: rebuild
+          path: ./module1-frontend/package-lock.json
+        - action: rebuild
+          path: ./module1-frontend/Dockerfile
     depends_on:
       - backend
     networks:
@@ -132,6 +190,10 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
+    develop:
+      watch:
+        - action: restart
+          path: ./module4-observability/prometheus.yml
     networks:
       - saiv-network
 
@@ -148,6 +210,10 @@ services:
       - ./module4-observability/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
+    develop:
+      watch:
+        - action: restart
+          path: ./module4-observability/grafana/provisioning
     networks:
       - saiv-network
 
@@ -160,6 +226,29 @@ services:
     volumes:
       - ./module4-observability/otel-collector-config.yml:/etc/otel/config.yaml
     command: ["--config=/etc/otel/config.yaml"]
+    develop:
+      watch:
+        - action: restart
+          path: ./module4-observability/otel-collector-config.yml
+    networks:
+      - saiv-network
+
+  observability-ui:
+    build:
+      context: ./module4-observability
+      dockerfile: Dockerfile
+    container_name: saiv-observability-ui
+    ports:
+      - "8502:8501"
+    volumes:
+      - ./module4-observability/app:/app/app
+    command: ["streamlit", "run", "app/main.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.runOnSave=true", "--server.fileWatcherType=poll"]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./module4-observability/requirements.txt
+        - action: rebuild
+          path: ./module4-observability/Dockerfile
     networks:
       - saiv-network
 

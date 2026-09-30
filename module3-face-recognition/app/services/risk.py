@@ -43,7 +43,7 @@ def detect_vpn_proxy(ip_address: str, user_agent: str) -> tuple:
 
 def check_suspicious_ip(ip_address: str) -> tuple:
     if not ip_address:
-        return False, 0.0
+        return False, 0.5
     try:
         ip = ipaddress.ip_address(ip_address)
 
@@ -55,8 +55,11 @@ def check_suspicious_ip(ip_address: str) -> tuple:
         if any(ip in network for network in PRIVATE_NETWORKS):
             return True, PRIVATE_IP_CONFIDENCE
 
+        if not ip.is_global:
+            return True, PRIVATE_IP_CONFIDENCE
+
     except ValueError:
-        return False, 0.0
+        return True, 1.0
 
     return False, 0.0
 

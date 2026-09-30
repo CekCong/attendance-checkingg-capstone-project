@@ -1,6 +1,8 @@
 # =============================================================================
 # RISK ASSESSMENT ENDPOINT (REQUIRED - 3 points in public tests)
 # =============================================================================
+from math import asin, cos, radians, sin, sqrt
+
 from fastapi import APIRouter
 from app.schemas.risk import RiskAssessRequest, RiskAssessResponse
 from app.services.risk import detect_vpn_proxy
@@ -18,7 +20,6 @@ MEDIUM_RISK_THRESHOLD = 0.30
 HIGH_RISK_THRESHOLD = 0.50
 CRITICAL_RISK_THRESHOLD = 0.70
 MIN_REASONABLE_ACCURACY_METERS = 5.0
-MAX_REASONABLE_ACCURACY_METERS = 5000.0
 
 
 def _clamp(value: float) -> float:
@@ -28,19 +29,47 @@ def _clamp(value: float) -> float:
 def _device_risk(signature: str | None, public_key: str | None) -> float:
     if signature is None and public_key is None:
         return MISSING_SIGNAL_RISK
-    if signature and public_key and "PUBLIC KEY" in public_key:
-        return 0.0
+    # Do not trust text that merely looks like a key. A valid attestation
+    # protocol must verify a signature over a server-issued challenge.
     return 0.75
 
 
-def _geolocation_risk(geolocation) -> float:
+def _distance_meters(latitude, longitude, venue_latitude, venue_longitude) -> float:
+    earth_radius_meters = 6_371_000
+    latitude_delta = radians(venue_latitude - latitude)
+    longitude_delta = radians(venue_longitude - longitude)
+    start_latitude = radians(latitude)
+    end_latitude = radians(venue_latitude)
+    haversine = (
+        sin(latitude_delta / 2) ** 2
+        + cos(start_latitude) * cos(end_latitude) * sin(longitude_delta / 2) ** 2
+    )
+    return 2 * earth_radius_meters * asin(sqrt(haversine))
+
+
+def _geolocation_risk(
+    geolocation,
+    venue_latitude,
+    venue_longitude,
+    allowed_radius_meters,
+) -> float:
     if geolocation is None:
         return MISSING_SIGNAL_RISK
-    if not (-90 <= geolocation.latitude <= 90 and -180 <= geolocation.longitude <= 180):
-        return 1.0
-    if geolocation.accuracy < 0 or geolocation.accuracy > MAX_REASONABLE_ACCURACY_METERS:
-        return 1.0
     if geolocation.accuracy < MIN_REASONABLE_ACCURACY_METERS:
+        return 0.5
+
+    if venue_latitude is None or venue_longitude is None:
+        return MISSING_SIGNAL_RISK
+
+    distance = _distance_meters(
+        geolocation.latitude,
+        geolocation.longitude,
+        venue_latitude,
+        venue_longitude,
+    )
+    if distance > allowed_radius_meters + geolocation.accuracy:
+        return 1.0
+    if distance > allowed_radius_meters or geolocation.accuracy > allowed_radius_meters:
         return 0.5
     return 0.0
 
@@ -102,7 +131,12 @@ async def assess_risk(request: RiskAssessRequest):
     )
     device_risk = _device_risk(request.device_signature, request.device_public_key)
     _, network_risk = detect_vpn_proxy(request.ip_address, request.user_agent)
-    geolocation_risk = _geolocation_risk(request.geolocation)
+    geolocation_risk = _geolocation_risk(
+        request.geolocation,
+        request.venue_latitude,
+        request.venue_longitude,
+        request.allowed_radius_meters,
+    )
 
     signal_breakdown = {
         "liveness": liveness_risk * LIVENESS_WEIGHT,
@@ -124,10 +158,17 @@ async def assess_risk(request: RiskAssessRequest):
     if geolocation_risk >= 0.5:
         recommendations.append("Enable precise location services")
 
+    required_signals_present = (
+        request.liveness_score is not None
+        and request.face_match_score is not None
+        and request.ip_address is not None
+        and request.geolocation is not None
+    )
+
     return RiskAssessResponse(
         risk_score=risk_score,
         risk_level=_risk_level(risk_score),
-        pass_threshold=risk_score < RISK_THRESHOLD,
+        pass_threshold=required_signals_present and risk_score < RISK_THRESHOLD,
         risk_threshold=RISK_THRESHOLD,
         signal_breakdown=signal_breakdown,
         recommendations=recommendations,
