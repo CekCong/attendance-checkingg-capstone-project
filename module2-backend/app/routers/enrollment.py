@@ -4,18 +4,36 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, func
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, func, create_engine
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import declarative_base, Session, relationship
-
-from database import get_db
+from sqlalchemy.orm import declarative_base, Session, relationship, sessionmaker
 from security import get_current_user
+import os
+from dotenv import load_dotenv
+
+# Database model
 
 Base = declarative_base()
 
-# =====================================================================
-# Database Models
-# =====================================================================
+load_dotenv()
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", 
+    "postgresql://postgres:your_password@localhost:5432/your_database"
+)
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+Base = declarative_base()
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 
 class User(Base):
     __tablename__ = "users"

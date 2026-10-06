@@ -1,232 +1,173 @@
-import uuid
-from datetime import datetime, timezone, timedelta, date
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Column, String, Float, Boolean, DateTime, Text, ForeignKey, create_engine, func, cast, Date, and_
-from sqlalchemy.dialects.postgresql import UUID, ENUM as PG_ENUM
-from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
-import enum
+CREATE TABLE users (
+    id VARCHAR(36) PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    hashed_password VARCHAR(255) NOT NULL,
+    role ENUM('student', 'instructor', 'ta', 'admin') NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    camera_consent BOOLEAN DEFAULT FALSE,
+    geolocation_consent BOOLEAN DEFAULT FALSE,
+    face_embedding_hash VARCHAR(64) NULL,
+    face_enrolled BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    last_login_at TIMESTAMP NULL,
+    scheduled_deletion_at TIMESTAMP NULL
+);
 
-from database import get_db
-from security import get_current_user
+CREATE TABLE courses (
+    id VARCHAR(36) PRIMARY KEY,
+    code VARCHAR(20) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT NULL,
+    semester VARCHAR(20) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    venue_latitude FLOAT NULL,
+    venue_longitude FLOAT NULL,
+    venue_name VARCHAR(255) NULL,
+    geofence_radius_meters FLOAT DEFAULT 100.0,
+    require_face_recognition BOOLEAN DEFAULT FALSE,
+    require_device_binding BOOLEAN DEFAULT TRUE,
+    risk_threshold FLOAT DEFAULT 0.5,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
 
-Base = declarative_base()
+CREATE TABLE sessions (
+    id VARCHAR(36) PRIMARY KEY,
+    course_id VARCHAR(36) NOT NULL,
+    instructor_id VARCHAR(36) NULL,
+    name VARCHAR(255) NOT NULL,
+    session_type VARCHAR(50) DEFAULT 'lecture',
+    description TEXT NULL,
+    scheduled_start TIMESTAMP NOT NULL,
+    scheduled_end TIMESTAMP NOT NULL,
+    checkin_opens_at TIMESTAMP NOT NULL,
+    checkin_closes_at TIMESTAMP NOT NULL,
+    status ENUM('scheduled', 'active', 'closed', 'cancelled') NOT NULL,
+    actual_start TIMESTAMP NULL,
+    actual_end TIMESTAMP NULL,
+    venue_latitude FLOAT NULL,
+    venue_longitude FLOAT NULL,
+    venue_name VARCHAR(255) NULL,
+    geofence_radius_meters FLOAT NULL,
+    require_liveness_check BOOLEAN DEFAULT TRUE,
+    require_face_match BOOLEAN DEFAULT FALSE,
+    risk_threshold FLOAT NULL,
+    qr_code_secret VARCHAR(64) NULL,
+    qr_code_expires_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+    FOREIGN KEY (instructor_id) REFERENCES users(id) ON DELETE SET NULL
+);
 
-# --- PostgreSQL ENUM Definitions ---
-class UserRole(str, enum.Enum):
-    student = "student"
-    instructor = "instructor"
-    ta = "ta"
-    admin = "admin"
+CREATE TABLE devices (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    device_fingerprint VARCHAR(64) UNIQUE NOT NULL,
+    device_name VARCHAR(255) NULL,
+    platform VARCHAR(50) NULL,
+    browser VARCHAR(100) NULL,
+    os_version VARCHAR(50) NULL,
+    app_version VARCHAR(50) NULL,
+    public_key TEXT NOT NULL,
+    public_key_created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    public_key_expires_at TIMESTAMP NULL,
+    attestation_passed BOOLEAN DEFAULT FALSE,
+    last_attestation_at TIMESTAMP NULL,
+    attestation_token TEXT NULL,
+    is_trusted BOOLEAN DEFAULT FALSE,
+    trust_score VARCHAR(20) DEFAULT 'low',
+    is_emulator BOOLEAN DEFAULT FALSE,
+    is_rooted_jailbroken BOOLEAN DEFAULT FALSE,
+    first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    total_checkins INTEGER DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    revoked_at TIMESTAMP NULL,
+    revocation_reason TEXT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 
-class CheckinStatus(str, enum.Enum):
-    pending = "pending"
-    approved = "approved"
-    flagged = "flagged"
-    rejected = "rejected"
-    appealed = "appealed"
+CREATE TABLE checkins (
+    id VARCHAR(36) PRIMARY KEY,
+    session_id VARCHAR(36) NOT NULL,
+    student_id VARCHAR(36) NOT NULL,
+    device_id VARCHAR(36) NULL,
+    status ENUM('pending', 'approved', 'flagged', 'rejected', 'appealed') NOT NULL,
+    checked_in_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    verified_at TIMESTAMP NULL,
+    latitude FLOAT NULL,
+    longitude FLOAT NULL,
+    location_accuracy_meters FLOAT NULL,
+    distance_from_venue_meters FLOAT NULL,
+    liveness_passed BOOLEAN NULL,
+    liveness_score FLOAT NULL,
+    liveness_challenge_type VARCHAR(50) NULL,
+    face_match_passed BOOLEAN NULL,
+    face_match_score FLOAT NULL,
+    face_embedding_hash VARCHAR(64) NULL,
+    risk_score FLOAT NOT NULL DEFAULT 0.0,
+    risk_factors TEXT NULL,
+    qr_code_verified BOOLEAN DEFAULT FALSE,
+    reviewed_by_id VARCHAR(36) NULL,
+    reviewed_at TIMESTAMP NULL,
+    review_notes TEXT NULL,
+    appeal_reason TEXT NULL,
+    appealed_at TIMESTAMP NULL,
+    scheduled_deletion_at TIMESTAMP NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE SET NULL,
+    FOREIGN KEY (reviewed_by_id) REFERENCES users(id) ON DELETE SET NULL
+);
 
-class SessionStatus(str, enum.Enum):
-    scheduled = "scheduled"
-    active = "active"
-    closed = "closed"
-    cancelled = "cancelled"
+CREATE TABLE risk_signals (
+    id VARCHAR(36) PRIMARY KEY,
+    checkin_id VARCHAR(36) NOT NULL,
+    signal_type ENUM(
+        'geo_out_of_bounds', 'impossible_travel', 'geo_accuracy_low',
+        'vpn_detected', 'proxy_detected', 'tor_detected', 'suspicious_ip',
+        'device_unknown', 'device_emulator', 'device_rooted', 'attestation_failed',
+        'rapid_succession', 'unusual_time', 'pattern_anomaly',
+        'liveness_failed', 'liveness_low_confidence', 'deepfake_suspected', 'replay_suspected',
+        'face_match_failed', 'face_match_low_confidence'
+    ) NOT NULL,
+    severity ENUM('low', 'medium', 'high', 'critical') NOT NULL,
+    confidence FLOAT NOT NULL DEFAULT 1.0,
+    details TEXT NULL,
+    weight FLOAT NOT NULL DEFAULT 0.1,
+    detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_risk_signals_checkin FOREIGN KEY (checkin_id) REFERENCES checkins(id) ON DELETE CASCADE
+);
 
-class RiskSignalSeverity(str, enum.Enum):
-    low = "low"
-    medium = "medium"
-    high = "high"
-    critical = "critical"
-
-# --- SQLAlchemy Models for PostgreSQL Schema ---
-class SessionModel(Base):
-    __tablename__ = "sessions"
-
-    id = Column(UUID(as_uuid=True), primary_key=True)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
-    instructor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    name = Column(String(255), nullable=False)
-    status = Column(
-        PG_ENUM(SessionStatus, name="session_status", create_type=False),
-        nullable=False,
-        default=SessionStatus.scheduled
-    )
-
-class Checkin(Base):
-    __tablename__ = "checkins"
-
-    id = Column(String(36), primary_key=True)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False)
-    student_id = Column(String(36), ForeignKey("users.id"), nullable=False)
-    status = Column(
-        PG_ENUM(CheckinStatus, name="checkin_status", create_type=False),
-        nullable=False
-    )
-    checked_in_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    risk_score = Column(Float, nullable=False, default=0.0)
-
-    session = relationship("SessionModel", backref="checkins")
-    risk_signals = relationship("RiskSignal", backref="checkin", cascade="all, delete-orphan")
-
-class RiskSignal(Base):
-    __tablename__ = "risk_signals"
-
-    id = Column(String(36), primary_key=True)
-    checkin_id = Column(String(36), ForeignKey("checkins.id"), nullable=False)
-    severity = Column(
-        PG_ENUM(RiskSignalSeverity, name="risk_signal_severity", create_type=False),
-        nullable=False
-    )
-    detected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-# --- Response Schemas ---
-class DailyCheckinTrend(BaseModel):
-    date: str
-    count: int
-
-class DailyAttendanceRateTrend(BaseModel):
-    date: str
-    rate: float
-
-class TrendsData(BaseModel):
-    checkins_by_day: List[DailyCheckinTrend]
-    attendance_rate_by_day: List[DailyAttendanceRateTrend]
-
-class StatsOverviewResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    total_sessions: int
-    active_sessions: int
-    total_checkins_today: int
-    total_checkins_week: int
-    average_attendance_rate: float
-    flagged_pending_review: int
-    approval_rate: float
-    average_risk_score: float
-    high_risk_checkins_today: int
-    trends: TrendsData
-
-# --- Router ---
-router = APIRouter(prefix="/stats", tags=["Statistics"])
-
-@router.get("/overview", response_model=StatsOverviewResponse, status_code=status.HTTP_200_OK)
-def get_stats_overview(
-    course_id: Optional[uuid.UUID] = Query(None, description="Filter stats by course"),
-    days: int = Query(7, ge=1, le=365, description="Number of days for trends"),
-    current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.get("role") not in ["instructor", "admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Instructor or admin permissions required."
-        )
-
-    now = datetime.now(timezone.utc)
-    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    week_start = now - timedelta(days=7)
-    trend_start_datetime = datetime.combine((now - timedelta(days=days - 1)).date(), datetime.min.time(), tzinfo=timezone.utc)
-
-    # 1. Sessions Count
-    session_query = db.query(SessionModel)
-    if course_id:
-        session_query = session_query.filter(SessionModel.course_id == course_id)
-
-    total_sessions = session_query.count()
-    active_sessions = session_query.filter(SessionModel.status == SessionStatus.active).count()
-
-    # 2. Check-ins Count
-    checkin_query = db.query(Checkin).join(Checkin.session)
-    if course_id:
-        checkin_query = checkin_query.filter(SessionModel.course_id == course_id)
-
-    total_checkins_today = checkin_query.filter(Checkin.checked_in_at >= today_start).count()
-    total_checkins_week = checkin_query.filter(Checkin.checked_in_at >= week_start).count()
-
-    flagged_pending_review = checkin_query.filter(
-        Checkin.status.in_([CheckinStatus.flagged, CheckinStatus.appealed])
-    ).count()
-
-    # High Risk Check-ins Today
-    high_risk_query = (
-        db.query(func.count(func.distinct(Checkin.id)))
-        .join(Checkin.session)
-        .join(Checkin.risk_signals)
-        .filter(
-            Checkin.checked_in_at >= today_start,
-            RiskSignal.severity.in_([RiskSignalSeverity.high, RiskSignalSeverity.critical])
-        )
-    )
-    if course_id:
-        high_risk_query = high_risk_query.filter(SessionModel.course_id == course_id)
-    high_risk_count = high_risk_query.scalar() or 0
-
-    # Calculated Aggregates
-    total_checkins_count = checkin_query.count()
-    if total_checkins_count > 0:
-        approved_count = checkin_query.filter(Checkin.status == CheckinStatus.approved).count()
-        approval_rate = round(approved_count / total_checkins_count, 2)
-
-        avg_risk = checkin_query.with_entities(func.avg(Checkin.risk_score)).scalar()
-        average_risk_score = round(float(avg_risk), 2) if avg_risk is not None else 0.0
-        average_attendance_rate = round(approved_count / total_checkins_count, 2)
-    else:
-        approval_rate = 0.0
-        average_risk_score = 0.0
-        average_attendance_rate = 0.0
-
-    # 3. Trends Aggregations
-    daily_records = (
-        checkin_query
-        .filter(Checkin.checked_in_at >= trend_start_datetime)
-        .with_entities(
-            cast(Checkin.checked_in_at, Date).label("checkin_date"),
-            Checkin.status,
-            func.count(Checkin.id).label("count")
-        )
-        .group_by("checkin_date", Checkin.status)
-        .all()
-    )
-
-    daily_totals: Dict[str, int] = {}
-    daily_approved: Dict[str, int] = {}
-
-    for row in daily_records:
-        if not row.checkin_date:
-            continue
-        d_str = row.checkin_date.strftime("%Y-%m-%d")
-        daily_totals[d_str] = daily_totals.get(d_str, 0) + row.count
-        if row.status == CheckinStatus.approved:
-            daily_approved[d_str] = daily_approved.get(d_str, 0) + row.count
-
-    checkins_by_day = []
-    attendance_rate_by_day = []
-
-    for i in range(days - 1, -1, -1):
-        day_date = (now - timedelta(days=i)).date()
-        date_str = day_date.strftime("%Y-%m-%d")
-        
-        total_d = daily_totals.get(date_str, 0)
-        approved_d = daily_approved.get(date_str, 0)
-        
-        checkins_by_day.append(DailyCheckinTrend(date=date_str, count=total_d))
-        
-        rate = round(approved_d / total_d, 2) if total_d > 0 else 0.0
-        attendance_rate_by_day.append(DailyAttendanceRateTrend(date=date_str, rate=rate))
-
-    return StatsOverviewResponse(
-        total_sessions=total_sessions,
-        active_sessions=active_sessions,
-        total_checkins_today=total_checkins_today,
-        total_checkins_week=total_checkins_week,
-        average_attendance_rate=average_attendance_rate,
-        flagged_pending_review=flagged_pending_review,
-        approval_rate=approval_rate,
-        average_risk_score=average_risk_score,
-        high_risk_checkins_today=high_risk_count,
-        trends=TrendsData(
-            checkins_by_day=checkins_by_day,
-            attendance_rate_by_day=attendance_rate_by_day
-        )
-    )
+CREATE TABLE audit_logs (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NULL,
+    action ENUM(
+        'login_success',
+        'login_failed',
+        'logout',
+        'user_created',
+        'checkin_attempted',
+        'checkin_approved',
+        'checkin_rejected',
+        'data_exported',
+        'security_violation'
+    ) NOT NULL,
+    resource_type VARCHAR(50) NULL,
+    resource_id VARCHAR(36) NULL,
+    ip_address VARCHAR(45) NULL,
+    user_agent VARCHAR(500) NULL,
+    device_id VARCHAR(36) NULL,
+    details TEXT NULL,
+    success BOOLEAN DEFAULT TRUE,
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_audit_logs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_audit_logs_user_id (user_id),
+    INDEX idx_audit_logs_action (action),
+    INDEX idx_audit_logs_timestamp (timestamp),
+    INDEX idx_audit_logs_resource (resource_type, resource_id),
+    INDEX idx_audit_logs_ip_address (ip_address)
+);
