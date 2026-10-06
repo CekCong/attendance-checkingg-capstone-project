@@ -3,19 +3,41 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Column, String, Float, DateTime, ForeignKey, func, cast, Date
+from sqlalchemy import Column, String, Float, DateTime, ForeignKey, func, cast, Date, create_engine
 from sqlalchemy.dialects.postgresql import UUID, ENUM as PG_ENUM
-from sqlalchemy.orm import declarative_base, Session, relationship
+from sqlalchemy.orm import declarative_base, Session, relationship, sessionmaker
 import enum
+import os
+from dotenv import load_dotenv
 
-from database import get_db
 from security import get_current_user
 
+load_dotenv()
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", 
+    "postgresql://postgres:your_password@localhost:5432/your_database"
+)
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 Base = declarative_base()
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 
 # =====================================================================
 # Database Models & Enums
 # =====================================================================
+
+
 
 class CheckinStatus(str, enum.Enum):
     pending = "pending"
