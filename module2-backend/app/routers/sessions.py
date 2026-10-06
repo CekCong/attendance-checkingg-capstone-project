@@ -6,13 +6,22 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, Enum as SQLEnum, ForeignKey, create_engine, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 import enum
+import os
+from dotenv import load_dotenv
 
 from security import get_current_user
 
 # --- Database & Base Setup ---
-DATABASE_URL = "postgresql://postgres:password@localhost:5432/postgres"
+load_dotenv()
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", 
+    "postgresql://postgres:your_password@localhost:5432/your_database"
+)
+
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 Base = declarative_base()
 
 def get_db():

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, String, Boolean, DateTime, Date, Float, ForeignKey, func, create_engine, or_
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, Session, sessionmaker, relationship
+from security import get_current_user
 
 # Environment Configuration & Database Setup
 # =====================================================================

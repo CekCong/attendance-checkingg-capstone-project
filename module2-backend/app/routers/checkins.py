@@ -1,4 +1,5 @@
 import uuid
+import os
 import math
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
@@ -7,14 +8,23 @@ from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import Column, String, Float, Boolean, DateTime, JSON, ForeignKey, Enum as SQLEnum, create_engine, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
+from dotenv import load_dotenv
 import enum
 
 from security import get_current_user
 
-# --- Database Setup ---
-DATABASE_URL = "postgresql://postgres:password@localhost:5432/postgres"
+# Environment Configuration & Database Setup
+
+load_dotenv()
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", 
+    "postgresql://postgres:your_password@localhost:5432/your_database"
+)
+
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 Base = declarative_base()
 
 def get_db():
