@@ -44,29 +44,7 @@ class SessionStatus(str, enum.Enum):
     closed = "closed"
     cancelled = "cancelled"
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(String(36), primary_key=True)
-    email = Column(String(255), unique=True, nullable=False)
-    full_name = Column(String(255), nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    role = Column(SQLEnum(UserRole), nullable=False)
-    is_active = Column(Boolean, nullable=False, default=True)
-    camera_consent = Column(Boolean, default=False)
-    geolocation_consent = Column(Boolean, default=False)
-    face_embedding_hash = Column(String(64), nullable=True)
-    face_enrolled = Column(Boolean, default=False)
-    created_at = Column(DateTime, nullable=False, server_default=func.now())
-    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
-    last_login_at = Column(DateTime, nullable=True)
-    scheduled_deletion_at = Column(DateTime, nullable=True)
-
-class SessionModel(Base):
-    __tablename__ = "sessions"
-
-    id = Column(String(36), primary_key=True)
-    status = Column(SQLEnum(SessionStatus), nullable=False)
+from models import UserModel as User, SessionModel
 
 class CourseEnrollment(Base):
     __tablename__ = "course_enrollments"

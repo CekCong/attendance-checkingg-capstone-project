@@ -11,6 +11,8 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from dotenv import load_dotenv
 import enum
 
+from models import SessionModel
+
 from security import get_current_user
 
 # Environment Configuration & Database Setup
@@ -67,33 +69,6 @@ class User(Base):
     full_name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, nullable=False)
 
-class SessionModel(Base):
-    __tablename__ = "sessions"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
-    instructor_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    name = Column(String(255), nullable=False)
-    session_type = Column(String(50), default="lecture")
-    description = Column(String, nullable=True)
-    scheduled_start = Column(DateTime(timezone=True), nullable=False)
-    scheduled_end = Column(DateTime(timezone=True), nullable=False)
-    checkin_opens_at = Column(DateTime(timezone=True), nullable=False)
-    checkin_closes_at = Column(DateTime(timezone=True), nullable=False)
-    status = Column(SQLEnum(SessionStatus, name="session_status"), nullable=False, default=SessionStatus.scheduled)
-    actual_start = Column(DateTime(timezone=True), nullable=True)
-    actual_end = Column(DateTime(timezone=True), nullable=True)
-    venue_latitude = Column(Float, nullable=True)
-    venue_longitude = Column(Float, nullable=True)
-    venue_name = Column(String(255), nullable=True)
-    geofence_radius_meters = Column(Float, nullable=True)
-    require_liveness_check = Column(Boolean, default=True)
-    require_face_match = Column(Boolean, default=False)
-    risk_threshold = Column(Float, nullable=True)
-    qr_code_secret = Column(String(64), nullable=True)
-    qr_code_expires_at = Column(DateTime(timezone=True), nullable=True)
-
-    course = relationship("Course", backref="sessions")
 
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"

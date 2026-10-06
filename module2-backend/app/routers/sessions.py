@@ -32,24 +32,14 @@ def get_db():
         db.close()
 
 # --- Enums & SQLAlchemy Models ---
+
 class SessionStatus(str, enum.Enum):
     scheduled = "scheduled"
     active = "active"
     closed = "closed"
     cancelled = "cancelled"
 
-class Course(Base):
-    __tablename__ = "courses"
-
-    id = Column(String(36), primary_key=True)
-    code = Column(String(20), unique=True, nullable=False)
-    name = Column(String(255), nullable=False)
-    instructor_id = Column(String(36), nullable=False)
-    venue_name = Column(String(255), nullable=True)
-    venue_latitude = Column(Float, nullable=True)
-    venue_longitude = Column(Float, nullable=True)
-    geofence_radius_meters = Column(Float, nullable=True)
-    risk_threshold = Column(Float, nullable=True)
+from models import CourseModel as Course, SessionModel
 
 class CourseEnrollment(Base):
     __tablename__ = "course_enrollments"
@@ -66,33 +56,6 @@ class AttendanceRecord(Base):
     student_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(50), default="checked_in")
 
-class SessionModel(Base):
-    __tablename__ = "sessions"
-
-    id = Column(String(36), primary_key=True)
-    course_id = Column(String(36), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
-    instructor_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    name = Column(String(255), nullable=False)
-    session_type = Column(String(50), default="lecture")
-    description = Column(Text, nullable=True)
-    scheduled_start = Column(DateTime, nullable=False)
-    scheduled_end = Column(DateTime, nullable=False)
-    checkin_opens_at = Column(DateTime, nullable=False)
-    checkin_closes_at = Column(DateTime, nullable=False)
-    status = Column(SQLEnum(SessionStatus), nullable=False)
-    actual_start = Column(DateTime, nullable=True)
-    actual_end = Column(DateTime, nullable=True)
-    venue_latitude = Column(Float, nullable=True)
-    venue_longitude = Column(Float, nullable=True)
-    venue_name = Column(String(255), nullable=True)
-    geofence_radius_meters = Column(Float, nullable=True)
-    require_liveness_check = Column(Boolean, default=True)
-    require_face_match = Column(Boolean, default=False)
-    risk_threshold = Column(Float, nullable=True)
-    qr_code_secret = Column(String(64), nullable=True)
-    qr_code_expires_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, nullable=False, server_default=func.now())
-    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     course = relationship("Course", backref="sessions")
 

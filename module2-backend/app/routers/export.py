@@ -36,26 +36,9 @@ def get_db():
         db.close()
 
 
-# Database Models
-# =====================================================================
+# Database Models (including imports)
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    full_name = Column(String(255), nullable=False)
-    email = Column(String(255), nullable=False)
-
-class Course(Base):
-    __tablename__ = "courses"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    code = Column(String(20), nullable=False)
-    name = Column(String(255), nullable=False)
-    semester = Column(String(50), nullable=False)
-    instructor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-
-    instructor = relationship("User", foreign_keys=[instructor_id])
+from models import UserModel as User, CourseModel as Course
 
 class AttendanceSession(Base):
     __tablename__ = "attendance_sessions"

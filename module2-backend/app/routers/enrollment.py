@@ -35,38 +35,9 @@ def get_db():
         db.close()
 
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    full_name = Column(String(255), nullable=False)
-    email = Column(String(255), nullable=False)
-
-class Course(Base):
-    __tablename__ = "courses"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    code = Column(String(20), nullable=False)
-    name = Column(String(255), nullable=False)
-    semester = Column(String(50), nullable=False)
-    instructor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-
-    instructor = relationship("User", foreign_keys=[instructor_id])
-
-class Enrollment(Base):
-    __tablename__ = "enrollments"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
-    enrolled_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    is_active = Column(Boolean, nullable=False, default=True)
-
-    course = relationship("Course", backref="enrollments")
-    student = relationship("User", foreign_keys=[student_id], backref="enrollments")
+from models import UserModel as User, CourseModel as Course, EnrollmentModel as Enrollment
 
 
-# =====================================================================
 # Pydantic Schemas
 # =====================================================================
 

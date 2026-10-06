@@ -44,20 +44,7 @@ class AuditAction(str, enum.Enum):
     security_violation = "security_violation"
 
 # --- SQLAlchemy Model ---
-class AuditLog(Base):
-    __tablename__ = "audit_logs"
-
-    id = Column(String(36), primary_key=True)
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    action = Column(SQLEnum(AuditAction), nullable=False)
-    resource_type = Column(String(50), nullable=True)
-    resource_id = Column(String(36), nullable=True)
-    ip_address = Column(String(45), nullable=True)
-    user_agent = Column(String(500), nullable=True)
-    device_id = Column(String(36), nullable=True)
-    details = Column(Text, nullable=True)
-    success = Column(Boolean, default=True)
-    timestamp = Column(DateTime, nullable=False, server_default=func.now())
+from models import AuditLogModel as AuditLog
 
 # --- Pydantic Schemas ---
 class AuditLogCreate(BaseModel):
@@ -95,7 +82,6 @@ class AuditLogListResponse(BaseModel):
 
 # --- Router Implementation (app/routers/audit.py) ---
 router = APIRouter(prefix="/audit", tags=["Audit Logs"])
-
 
 # GET /audit/logs - Retrieve audit logs
 @router.get("/logs", response_model=AuditLogListResponse)

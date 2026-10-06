@@ -9,6 +9,7 @@ CREATE TABLE users (
     geolocation_consent BOOLEAN DEFAULT FALSE,
     face_embedding_hash VARCHAR(64) NULL,
     face_enrolled BOOLEAN DEFAULT FALSE,
+    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     last_login_at TIMESTAMP NULL,

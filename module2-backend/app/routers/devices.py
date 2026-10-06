@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker, declarative_base
 from auth import get_current_user  # Adjust based on your auth implementation
 import os
 from dotenv import load_dotenv
+from models import DeviceModel
 
 from security import get_current_user
 
@@ -31,36 +32,6 @@ def get_db():
         db.close()
 
 router = APIRouter(prefix="/devices", tags=["Devices"])
-
-# --- SQLAlchemy Model ---
-class DeviceModel(Base):
-    __tablename__ = "devices"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    device_fingerprint = Column(String(64), unique=True, nullable=False)
-    device_name = Column(String(255), nullable=True)
-    platform = Column(String(50), nullable=True)
-    browser = Column(String(100), nullable=True)
-    os_version = Column(String(50), nullable=True)
-    app_version = Column(String(50), nullable=True)
-    public_key = Column(Text, nullable=False)
-    public_key_created_at = Column(DateTime, nullable=False, server_default=func.now())
-    public_key_expires_at = Column(DateTime, nullable=True)
-    attestation_passed = Column(Boolean, default=False)
-    last_attestation_at = Column(DateTime, nullable=True)
-    attestation_token = Column(Text, nullable=True)
-    is_trusted = Column(Boolean, default=False)
-    trust_score = Column(String(20), default='low')
-    is_emulator = Column(Boolean, default=False)
-    is_rooted_jailbroken = Column(Boolean, default=False)
-    first_seen_at = Column(DateTime, nullable=False, server_default=func.now())
-    last_seen_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
-    total_checkins = Column(Integer, default=0)
-    is_active = Column(Boolean, nullable=False, default=True)
-    revoked_at = Column(DateTime, nullable=True)
-    revocation_reason = Column(Text, nullable=True)
-
 
 # --- Pydantic Schemas ---
 class DeviceRegisterRequest(BaseModel):

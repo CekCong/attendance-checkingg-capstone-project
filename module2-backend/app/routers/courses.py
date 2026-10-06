@@ -7,6 +7,7 @@ from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, ForeignKe
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 import os
 from dotenv import load_dotenv
+from models import CourseModel as Course, UserModel as User
 
 from app.security import get_current_user, require_roles
 
@@ -30,41 +31,7 @@ def get_db():
     finally:
         db.close()
 
-# -----------------------------------------------------------------------------
-# 2. SQLAlchemy Models
-# -----------------------------------------------------------------------------
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(String(36), primary_key=True)
-    full_name = Column(String(255), nullable=False)
-
-
-class Course(Base):
-    __tablename__ = "courses"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    code = Column(String(20), unique=True, nullable=False)
-    name = Column(String(255), nullable=False)
-    description = Column(Text, nullable=True)
-    semester = Column(String(20), nullable=False)
-    instructor_id = Column(String(36), ForeignKey("users.id"), nullable=False)
-    is_active = Column(Boolean, nullable=False, default=True)
-    venue_latitude = Column(Float, nullable=True)
-    venue_longitude = Column(Float, nullable=True)
-    venue_name = Column(String(255), nullable=True)
-    geofence_radius_meters = Column(Float, default=100.0)
-    require_face_recognition = Column(Boolean, default=False)
-    require_device_binding = Column(Boolean, default=True)
-    risk_threshold = Column(Float, default=0.5)
-    created_at = Column(DateTime, nullable=False, server_default=func.now())
-    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
-
-    instructor = relationship("User", backref="courses")
-
-# -----------------------------------------------------------------------------
-# 3. Pydantic Schemas
-# -----------------------------------------------------------------------------
+#2. Pydantic Schemas ---
 class CourseCreate(BaseModel):
     code: str
     name: str
