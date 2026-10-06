@@ -96,7 +96,7 @@ def export_course_attendance(
     db: Session = Depends(get_db)
 ):
     """
-    Export attendance data for a course. **Requires auth (instructor for course, or admin).**[cite: 4]
+    Export attendance data for a course. **Requires auth (instructor for course, or admin).**
     """
     user_role = current_user.get("role")
     if user_role not in ["instructor", "admin"]:
@@ -203,7 +203,7 @@ def export_session_attendance(
     db: Session = Depends(get_db)
 ):
     """
-    Export check-in data for a session. **Requires auth (instructor for session, or admin).**[cite: 5]
+    Export check-in data for a session. **Requires auth (instructor for session, or admin).**
     """
     user_role = current_user.get("role")
     if user_role not in ["instructor", "admin"]:

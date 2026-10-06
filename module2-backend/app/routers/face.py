@@ -26,14 +26,14 @@ class FaceEnrollDetails(BaseModel):
 
 class FaceEnrollResponse(BaseModel):
     enrollment_successful: bool
-    face_template_hash: str  # 64-character SHA-256 hex string[cite: 7]
+    face_template_hash: str  # 64-character SHA-256 hex string
     quality_score: float
     details: FaceEnrollDetails
 
 
 class FaceVerifyRequest(BaseModel):
-    image: str = Field(..., description="Base64-encoded face image to verify[cite: 8]")
-    reference_template_hash: str = Field(..., description="Hash from enrollment (stored in users.face_embedding_hash)[cite: 8]")
+    image: str = Field(..., description="Base64-encoded face image to verify")
+    reference_template_hash: str = Field(..., description="Hash from enrollment (stored in users.face_embedding_hash)")
 
 class FaceVerifyResponse(BaseModel):
     match_passed: bool
@@ -50,33 +50,33 @@ class FaceVerifyResponse(BaseModel):
 @app.post("/face/enroll", response_model=FaceEnrollResponse, status_code=status.HTTP_201_CREATED)
 def enroll_face(payload: FaceEnrollRequest):
     """
-    Enroll a user's face for future verification. This is a one-time registration per user[cite: 6].
-    Enforces privacy requirements (in-memory processing only, no raw images stored)[cite: 7].
+    Enroll a user's face for future verification. This is a one-time registration per user.
+    Enforces privacy requirements (in-memory processing only, no raw images stored).
     """
     if not payload.camera_consent:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Camera consent must be true to proceed with enrollment[cite: 7]."
+            detail="Camera consent must be true to proceed with enrollment."
         )
 
     if not payload.image or not payload.image.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid image: image payload is empty[cite: 7]."
+            detail="Invalid image: image payload is empty."
         )
 
     face_detected = True
-    detection_confidence = 0.95  # Must be >= 0.7[cite: 7]
-    quality_score = 0.85         # Must be >= 0.5[cite: 7]
+    detection_confidence = 0.95  # Must be >= 0.7
+    quality_score = 0.85         # Must be >= 0.5
     image_quality = "good"
 
     if not face_detected or detection_confidence < 0.7 or quality_score < 0.5:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No face detected or image quality does not meet the required threshold[cite: 7]."
+            detail="No face detected or image quality does not meet the required threshold."
         )
 
-    # Generate SHA-256 hash (64 hex characters) of the face template[cite: 7]
+    # Generate SHA-256 hash (64 hex characters) of the face template
     hasher = hashlib.sha256(f"{payload.user_id}:{payload.image}".encode("utf-8"))
     face_template_hash = hasher.hexdigest()
 
@@ -88,7 +88,7 @@ def enroll_face(payload: FaceEnrollRequest):
 
     return FaceEnrollResponse(
         enrollment_successful=True,
-        face_template_hash=face_template_hash,  # Store this in users.face_embedding_hash[cite: 7]
+        face_template_hash=face_template_hash,  # Stored in in users.face_embedding_hash
         quality_score=quality_score,
         details=details
     )
@@ -97,8 +97,8 @@ def enroll_face(payload: FaceEnrollRequest):
 @app.post("/face/verify", response_model=FaceVerifyResponse, status_code=status.HTTP_200_OK)
 def verify_face(payload: FaceVerifyRequest):
     """
-    Verify that a face image matches a previously enrolled face[cite: 8].
-    Matching logic: match_passed = (match_score >= 0.70)[cite: 8].
+    Verify that a face image matches a previously enrolled face.
+    Matching logic: match_passed = (match_score >= 0.70).
     """
     if not payload.image or not payload.image.strip():
         raise HTTPException(
@@ -140,5 +140,5 @@ def verify_face(payload: FaceVerifyRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # Runs locally on port 8001 as specified[cite: 6]
+    # Runs locally on port 8001 as specified
     uvicorn.run(app, host="0.0.0.0", port=8001)

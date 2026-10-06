@@ -89,7 +89,7 @@ class EnrollmentCreate(BaseModel):
 class BulkEnrollmentRequest(BaseModel):
     course_id: uuid.UUID
     student_emails: List[str]
-    create_accounts: bool = False  # If true, create accounts for unknown emails[cite: 3]
+    create_accounts: bool = False  # If true, create accounts for unknown emails
 
 class BulkEnrollmentDetail(BaseModel):
     email: str
@@ -137,7 +137,7 @@ def create_enrollment(
     db: Session = Depends(get_db)
 ):
     """
-    Enroll a student in a course. **Requires auth (instructor for course, or admin).**[cite: 2]
+    Enroll a student in a course. **Requires auth (instructor for course, or admin).**
     """
     user_role = current_user.get("role")
 
@@ -215,7 +215,7 @@ def bulk_enroll_students(
     db: Session = Depends(get_db)
 ):
     """
-    Bulk enroll students by email. **Requires auth (instructor for course, or admin).**[cite: 3]
+    Bulk enroll students by email. **Requires auth (instructor for course, or admin).**
     """
     user_role = current_user.get("role")
 
@@ -260,7 +260,7 @@ def bulk_enroll_students(
 
         if not student:
             if payload.create_accounts:
-                # Optional: create a placeholder account for unknown emails[cite: 3]
+                # Optional: create a placeholder account for unknown emails
                 # Extract a readable default name from the email prefix
                 default_name = clean_email.split('@')[0].replace('.', ' ').title()
                 student = User(full_name=default_name, email=clean_email)

@@ -64,15 +64,15 @@ class DeviceModel(Base):
 
 # --- Pydantic Schemas ---
 class DeviceRegisterRequest(BaseModel):
-    device_fingerprint: str = Field(..., max_length=64, description="Unique device hash[cite: 6, 7]")
-    device_name: Optional[str] = Field(None, max_length=255, description="Friendly name[cite: 6, 7]")
-    platform: Optional[str] = Field(None, description="Platform type (ios|android|web|desktop)[cite: 7]")
-    public_key: str = Field(..., description="PEM encoded public key[cite: 6, 7]")
+    device_fingerprint: str = Field(..., max_length=64, description="Unique device hash")
+    device_name: Optional[str] = Field(None, max_length=255, description="Friendly name")
+    platform: Optional[str] = Field(None, description="Platform type (ios|android|web|desktop)")
+    public_key: str = Field(..., description="PEM encoded public key")
 
 class DeviceUpdateRequest(BaseModel):
     device_name: Optional[str] = Field(None, max_length=255)
-    is_trusted: Optional[bool] = Field(None, description="Admin only[cite: 9]")
-    is_active: Optional[bool] = Field(None, description="Deactivate device[cite: 9]")
+    is_trusted: Optional[bool] = Field(None, description="Admin only")
+    is_active: Optional[bool] = Field(None, description="Deactivate device")
 
 class DeviceResponse(BaseModel):
     id: str
@@ -110,7 +110,7 @@ def register_device(
     current_user: Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Register a new device. **Requires auth.**[cite: 7]"""
+    """Register a new device. Requires auth."""
     user_id, _ = get_user_id_and_role(current_user)
 
     existing_device = db.query(DeviceModel).filter(DeviceModel.device_fingerprint == payload.device_fingerprint).first()
@@ -144,7 +144,7 @@ def list_my_devices(
     current_user: Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List current user's registered devices. **Requires auth.**[cite: 8]"""
+    """List current user's registered devices. Requires auth."""
     user_id, _ = get_user_id_and_role(current_user)
     devices = db.query(DeviceModel).filter(DeviceModel.user_id == user_id).all()
     return devices
@@ -156,14 +156,14 @@ def remove_device(
     current_user: Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Remove a device. **Requires auth (owner or admin).**[cite: 9]"""
+    """Remove a device. Requires auth (owner or admin)."""
     user_id, user_role = get_user_id_and_role(current_user)
 
     device = db.query(DeviceModel).filter(DeviceModel.id == device_id).first()
     if not device:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found.")
 
-    # Check authorization: must be owner or admin[cite: 9]
+    # Check authorization: must be owner or admin
     if device.user_id != user_id and user_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -182,7 +182,7 @@ def update_device(
     current_user: Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update device properties. **Requires auth (owner for name/status, admin for trust).**[cite: 9]"""
+    """Update device properties. Requires auth (owner for name/status, admin for trust)."""
     user_id, user_role = get_user_id_and_role(current_user)
 
     device = db.query(DeviceModel).filter(DeviceModel.id == device_id).first()
@@ -213,7 +213,7 @@ def update_device(
         if not is_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin permission required to update 'is_trusted' status[cite: 9]."
+                detail="Admin permission required to update 'is_trusted' status."
             )
         device.is_trusted = payload.is_trusted
 
