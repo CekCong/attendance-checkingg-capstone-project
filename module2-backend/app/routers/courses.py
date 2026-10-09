@@ -7,7 +7,7 @@ from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, ForeignKe
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 import os
 from dotenv import load_dotenv
-from models import CourseModel as Course, UserModel as User
+from models import CourseModel as Course, UserModel as User, SessionModel
 
 from app.security import get_current_user, require_roles
 
@@ -107,8 +107,8 @@ class CourseUpdate(BaseModel):
     risk_threshold: Optional[float] = None
 
 # -----------------------------------------------------------------------------
-# 4. API Endpoints Implementation
-# -----------------------------------------------------------------------------
+# API Endpoints Implementation
+
 router = APIRouter(prefix="/courses", tags=["courses"])
 
 
@@ -117,12 +117,21 @@ router = APIRouter(prefix="/courses", tags=["courses"])
 def list_courses(
     is_active: Optional[bool] = Query(True, description="Filter by active status"),
     semester: Optional[str] = Query(None, description="Filter by semester"),
-    instructor_id: Optional[str] = Query(None, description="Filter by instructor (admin only)"),
+    instructor_id: Optional[uuid.UUID] = Query(None, description="Filter by instructor (admin only)"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    List courses with optional filters. **Requires auth.**
+    """
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials."
+        )
+
     query = db.query(Course)
 
     if is_active is not None:
@@ -137,29 +146,46 @@ def list_courses(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Filtering by instructor_id is restricted to administrators."
             )
-        query = query.filter(Course.instructor_id == instructor_id)
+        # Filter courses that have at least one session assigned to this instructor
+        query = (
+            query.join(SessionModel, Course.id == SessionModel.course_id)
+            .filter(SessionModel.instructor_id == str(instructor_id))
+            .distinct()
+        )
 
     total = query.count()
     courses = query.offset(offset).limit(limit).all()
 
-    items = [
-        CourseListItemResponse(
-            id=course.id,
-            code=course.code,
-            name=course.name,
-            semester=course.semester,
-            instructor_id=course.instructor_id,
-            instructor_name=course.instructor.full_name if course.instructor else "Unknown",
-            venue_name=course.venue_name,
-            venue_latitude=course.venue_latitude,
-            venue_longitude=course.venue_longitude,
-            geofence_radius_meters=course.geofence_radius_meters,
-            risk_threshold=course.risk_threshold,
-            is_active=course.is_active,
-            created_at=course.created_at
+    items = []
+    for course in courses:
+        # Fetch an instructor associated with this course via SessionModel
+        session_instructor = (
+            db.query(SessionModel, User)
+            .join(User, SessionModel.instructor_id == User.id)
+            .filter(SessionModel.course_id == course.id, SessionModel.instructor_id.isnot(None))
+            .first()
         )
-        for course in courses
-    ]
+        
+        inst_id = session_instructor[0].instructor_id if session_instructor else None
+        inst_name = session_instructor[1].full_name if session_instructor else "Unknown"
+
+        items.append(
+            CourseListItemResponse(
+                id=course.id,
+                code=course.code,
+                name=course.name,
+                semester=course.semester,
+                instructor_id=inst_id,
+                instructor_name=inst_name,
+                venue_name=course.venue_name,
+                venue_latitude=course.venue_latitude,
+                venue_longitude=course.venue_longitude,
+                geofence_radius_meters=course.geofence_radius_meters,
+                risk_threshold=course.risk_threshold,
+                is_active=course.is_active,
+                created_at=course.created_at
+            )
+        )
 
     return {
         "items": items,
@@ -176,6 +202,9 @@ def create_course(
     _admin: Dict[str, Any] = Depends(require_roles("admin")),
     db: Session = Depends(get_db)
 ):
+    """
+    Create a new course. **Requires auth (admin only).**
+    """
     existing = db.query(Course).filter(Course.code == payload.code).first()
     if existing:
         raise HTTPException(
@@ -183,19 +212,45 @@ def create_course(
             detail=f"Course with code '{payload.code}' already exists."
         )
 
-    instructor = db.query(User).filter(User.id == payload.instructor_id).first()
-    if not instructor:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Instructor with ID '{payload.instructor_id}' not found."
-        )
+    # Verify instructor exists if provided
+    if payload.instructor_id:
+        instructor = db.query(User).filter(User.id == str(payload.instructor_id)).first()
+        if not instructor:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Instructor with ID '{payload.instructor_id}' not found."
+            )
 
-    course = Course(**payload.model_dump())
+    # Extract fields excluding instructor_id since Course doesn't store it directly
+    course_data = payload.model_dump(exclude={"instructor_id"})
+
+    # Course.id is String(36), requiring an explicit UUID string
+    course = Course(
+        id=str(uuid.uuid4()),
+        **course_data
+    )
     db.add(course)
 
     try:
         db.commit()
         db.refresh(course)
+
+        # If an instructor was provided, optionally create a default session linking them
+        if payload.instructor_id:
+            default_session = SessionModel(
+                id=str(uuid.uuid4()),
+                course_id=course.id,
+                instructor_id=str(payload.instructor_id),
+                name=f"{course.code} - Default Session",
+                scheduled_start=course.created_at,
+                scheduled_end=course.created_at,
+                checkin_opens_at=course.created_at,
+                checkin_closes_at=course.created_at,
+                status="scheduled"
+            )
+            db.add(default_session)
+            db.commit()
+
         return course
     except Exception as e:
         db.rollback()
@@ -212,13 +267,42 @@ def get_course_details(
     _current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Get course details. **Requires auth.**
+    """
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Course with ID '{course_id}' not found."
         )
-    return course
+
+    # Fetch associated instructor via SessionModel if needed
+    session_instructor = (
+        db.query(SessionModel, User)
+        .join(User, SessionModel.instructor_id == User.id)
+        .filter(SessionModel.course_id == course.id, SessionModel.instructor_id.isnot(None))
+        .first()
+    )
+    
+    inst_id = session_instructor[0].instructor_id if session_instructor else None
+    inst_name = session_instructor[1].full_name if session_instructor else "Unknown"
+
+    return CourseResponse(
+        id=course.id,
+        code=course.code,
+        name=course.name,
+        semester=course.semester,
+        instructor_id=inst_id,
+        instructor_name=inst_name,
+        venue_name=course.venue_name,
+        venue_latitude=course.venue_latitude,
+        venue_longitude=course.venue_longitude,
+        geofence_radius_meters=course.geofence_radius_meters,
+        risk_threshold=course.risk_threshold,
+        is_active=course.is_active,
+        created_at=course.created_at
+    )
 
 
 # PUT /courses/{course_id} - Update course (Admin or Course Instructor)
@@ -229,6 +313,9 @@ def update_course_full_or_partial(
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Update a course. **Requires auth (admin or course instructor).**
+    """
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(
@@ -236,9 +323,19 @@ def update_course_full_or_partial(
             detail=f"Course with ID '{course_id}' not found."
         )
 
-    # Permission check: must be admin or the assigned course instructor
+    # Check if user is admin
     is_admin = current_user.get("role") == "admin"
-    is_course_instructor = current_user.get("id") == course.instructor_id
+
+    # Check if user is an assigned instructor for this course via SessionModel
+    user_id_str = current_user.get("id") or current_user.get("sub")
+    is_course_instructor = False
+    if user_id_str:
+        instructor_session = db.query(SessionModel).filter(
+            SessionModel.course_id == course_id,
+            SessionModel.instructor_id == str(user_id_str)
+        ).first()
+        if instructor_session:
+            is_course_instructor = True
 
     if not (is_admin or is_course_instructor):
         raise HTTPException(
@@ -246,15 +343,41 @@ def update_course_full_or_partial(
             detail="Insufficient permissions. Only administrators or the assigned course instructor can update this course."
         )
 
-    # Partial update supported via exclude_unset=True
-    update_data = payload.model_dump(exclude_unset=True)
+    # Extract update data, excluding instructor_id if handled separately
+    update_data = payload.model_dump(exclude_unset=True, exclude={"instructor_id"})
     for key, value in update_data.items():
         setattr(course, key, value)
 
     try:
         db.commit()
         db.refresh(course)
-        return course
+
+        # Fetch instructor info for the response schema
+        session_instructor = (
+            db.query(SessionModel, User)
+            .join(User, SessionModel.instructor_id == User.id)
+            .filter(SessionModel.course_id == course.id, SessionModel.instructor_id.isnot(None))
+            .first()
+        )
+        
+        inst_id = session_instructor[0].instructor_id if session_instructor else None
+        inst_name = session_instructor[1].full_name if session_instructor else "Unknown"
+
+        return CourseResponse(
+            id=course.id,
+            code=course.code,
+            name=course.name,
+            semester=course.semester,
+            instructor_id=inst_id,
+            instructor_name=inst_name,
+            venue_name=course.venue_name,
+            venue_latitude=course.venue_latitude,
+            venue_longitude=course.venue_longitude,
+            geofence_radius_meters=course.geofence_radius_meters,
+            risk_threshold=course.risk_threshold,
+            is_active=course.is_active,
+            created_at=course.created_at
+        )
     except Exception as e:
         db.rollback()
         raise HTTPException(

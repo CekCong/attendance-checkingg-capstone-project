@@ -111,7 +111,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
 ### 3. Register Endpoint with Rate Limiting & Hashing
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterBody, request: Request, db: Session = Depends(get_db)):
-    # Rate Limiting: 10 registrations per 1 hour keyed by IP address[cite: 1]
+    # Rate Limiting: 10 registrations per 1 hour keyed by IP address
     client_ip = request.client.host if request.client else "unknown"
     if not check_rate_limit(f"rate_limit:register:{client_ip}", limit=10, window=3600):
         raise HTTPException(
@@ -161,7 +161,7 @@ async def login(
     response: Response, 
     db: Session = Depends(get_db)
 ):
-    # Rate Limiting: 60 login attempts per 1 hour keyed by IP address[cite: 1]
+    # Rate Limiting: 60 login attempts per 1 hour keyed by IP address
     client_ip = request.client.host if request.client else "unknown"
     if not check_rate_limit(f"rate_limit:login:{client_ip}", limit=60, window=3600):
         raise HTTPException(

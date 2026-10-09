@@ -11,7 +11,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from dotenv import load_dotenv
 import enum
 
-from models import SessionModel
+
 
 from security import get_current_user
 
@@ -62,13 +62,7 @@ class Course(Base):
     code = Column(String(50), nullable=False)
     name = Column(String(255), nullable=False)
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    full_name = Column(String(255), nullable=False)
-    email = Column(String(255), unique=True, nullable=False)
-
+from models import SessionModel, UserModel as User
 
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"

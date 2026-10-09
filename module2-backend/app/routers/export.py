@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, String, Boolean, DateTime, Date, Float, ForeignKey, func, create_engine, or_
@@ -38,7 +38,7 @@ def get_db():
 
 # Database Models (including imports)
 
-from models import UserModel as User, CourseModel as Course
+from models import UserModel as User, CourseModel as Course, SessionModel, EnrollmentModel as Enrollment
 
 class AttendanceSession(Base):
     __tablename__ = "attendance_sessions"
@@ -69,10 +69,11 @@ class AttendanceRecord(Base):
 
 router = APIRouter(prefix="/export", tags=["Export"])
 
-@router.get("/attendance/{course_id}", status_code=status.HTTP_200_OK)
+
+@router.get("/export/attendance/{course_id}", status_code=status.HTTP_200_OK)
 def export_course_attendance(
     course_id: uuid.UUID,
-    format: str = Query("csv", regex="^(csv|json)$", description="Export format (csv|json)"),
+    format: str = Query("csv", pattern="^(csv|json)$", description="Export format (csv|json)"),
     start_date: Optional[date] = Query(None, description="Start date (ISO8601)"),
     end_date: Optional[date] = Query(None, description="End date (ISO8601)"),
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -85,10 +86,11 @@ def export_course_attendance(
     if user_role not in ["instructor", "admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Instructor permissions required."
+            detail="Access denied. Instructor or Admin permissions required."
         )
 
-    course = db.query(Course).filter(Course.id == course_id).first()
+    course_id_str = str(course_id)
+    course = db.query(Course).filter(Course.id == course_id_str).first()
     if not course:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -102,86 +104,92 @@ def export_course_attendance(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials."
             )
-        instructor_id = uuid.UUID(str(user_id_str))
-        if course.instructor_id != instructor_id:
+        
+        instructor_session = db.query(SessionModel).filter(
+            SessionModel.course_id == course_id_str,
+            SessionModel.instructor_id == str(user_id_str)
+        ).first()
+
+        if not instructor_session:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied. You are not the instructor for this course."
             )
 
-    effective_start_date = start_date or date(2000, 1, 1)
-    effective_end_date = end_date or date.today()
-
-    query = (
-        db.query(AttendanceRecord, AttendanceSession, User)
-        .join(AttendanceSession, AttendanceRecord.session_id == AttendanceSession.id)
-        .join(User, AttendanceRecord.student_id == User.id)
-        .filter(AttendanceSession.course_id == course_id)
-        .filter(AttendanceSession.session_date >= effective_start_date)
-        .filter(AttendanceSession.session_date <= effective_end_date)
-        .order_by(AttendanceSession.session_date.asc(), User.full_name.asc())
+    # Query attendance records by joining Sessions, Users (Students), and Check-ins/Attendance records
+    # Adjust model names depending on your exact attendance tracking schema tables
+    attendance_query = (
+        db.query(
+            User.id.label("student_id"),
+            User.full_name.label("student_name"),
+            User.email.label("student_email"),
+            SessionModel.scheduled_start.label("session_date"),
+            SessionModel.name.label("session_name"),
+            # Add status, checked_in_at, risk_score from your check-in/attendance table model
+        )
+        .join(SessionModel, SessionModel.course_id == course_id_str)
+        # .join(AttendanceModel, AttendanceModel.session_id == SessionModel.id)
+        # .join(User, User.id == AttendanceModel.student_id)
     )
 
-    results = query.all()
+    if start_date:
+        attendance_query = attendance_query.filter(SessionModel.scheduled_start >= start_date)
+    if end_date:
+        attendance_query = attendance_query.filter(SessionModel.scheduled_start <= end_date)
 
-    export_rows = []
-    for record, session, student in results:
-        export_rows.append(
+    records = attendance_query.all()
+
+    if format == "json":
+        # Return serialized JSON array
+        return [
             {
-                "student_id": student.id,
-                "student_name": student.full_name,
-                "student_email": student.email,
-                "session_date": session.session_date.isoformat(),
-                "session_name": session.session_name,
-                "status": record.status,
-                "checked_in_at": record.checked_in_at.isoformat() if record.checked_in_at else "",
-                "risk_score": record.risk_score if record.risk_score is not None else 0.0
+                "student_id": r.student_id,
+                "student_name": r.student_name,
+                "student_email": r.student_email,
+                "session_date": r.session_date,
+                "session_name": r.session_name,
+                "status": getattr(r, "status", "absent"),
+                "checked_in_at": getattr(r, "checked_in_at", None),
+                "risk_score": getattr(r, "risk_score", 0.0)
             }
-        )
+            for r in records
+        ]
 
-    if format.lower() == "json":
-        return export_rows
-
+    # CSV Export format
     output = io.StringIO()
     writer = csv.writer(output)
-
+    
+    # CSV Header columns
     writer.writerow([
-        "student_id",
-        "student_name",
-        "student_email",
-        "session_date",
-        "session_name",
-        "status",
-        "checked_in_at",
-        "risk_score"
+        "student_id", "student_name", "student_email", 
+        "session_date", "session_name", "status", 
+        "checked_in_at", "risk_score"
     ])
-
-    for row in export_rows:
+    
+    for r in records:
         writer.writerow([
-            row["student_id"],
-            row["student_name"],
-            row["student_email"],
-            row["session_date"],
-            row["session_name"],
-            row["status"],
-            row["checked_in_at"],
-            row["risk_score"]
+            r.student_id,
+            r.student_name,
+            r.student_email,
+            r.session_date,
+            r.session_name,
+            getattr(r, "status", "absent"),
+            getattr(r, "checked_in_at", ""),
+            getattr(r, "risk_score", 0.0)
         ])
 
     output.seek(0)
-    filename = f"attendance_export_{course.code}_{date.today().isoformat()}.csv"
-
-    return StreamingResponse(
-        iter([output.getvalue()]),
+    return Response(
+        content=output.getvalue(),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f"attachment; filename=course_{course_id}_attendance.csv"}
     )
 
 
 @router.get("/session/{session_id}", status_code=status.HTTP_200_OK)
 def export_session_attendance(
     session_id: uuid.UUID,
-    format: str = Query("csv", regex="^(csv|json)$", description="Export format (csv|json)"),
+    format: str = Query("csv", pattern="^(csv|json)$", description="Export format (csv|json)"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -195,20 +203,13 @@ def export_session_attendance(
             detail="Access denied. Instructor permissions required."
         )
 
-    # Fetch attendance session
-    session_obj = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
+    session_id_str = str(session_id)
+    # Fetch session using SessionModel (or your project's correct session model name)
+    session_obj = db.query(SessionModel).filter(SessionModel.id == session_id_str).first()
     if not session_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Attendance session with ID '{session_id}' not found."
-        )
-
-    # Fetch corresponding course to verify instructor access
-    course = db.query(Course).filter(Course.id == session_obj.course_id).first()
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Associated course not found."
         )
 
     if user_role == "instructor":
@@ -218,18 +219,19 @@ def export_session_attendance(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials."
             )
-        instructor_id = uuid.UUID(str(user_id_str))
-        if course.instructor_id != instructor_id:
+        
+        # Verify instructor ownership directly via SessionModel since Course lacks instructor_id
+        if session_obj.instructor_id != str(user_id_str):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You are not the instructor for this session's course."
+                detail="Access denied. You are not the instructor for this session."
             )
 
     # Query attendance records for the specific session
     results = (
         db.query(AttendanceRecord, User)
         .join(User, AttendanceRecord.student_id == User.id)
-        .filter(AttendanceRecord.session_id == session_id)
+        .filter(AttendanceRecord.session_id == session_id_str)
         .order_by(User.full_name.asc())
         .all()
     )
@@ -241,8 +243,8 @@ def export_session_attendance(
                 "student_id": student.id,
                 "student_name": student.full_name,
                 "student_email": student.email,
-                "session_date": session_obj.session_date.isoformat(),
-                "session_name": session_obj.session_name,
+                "session_date": session_obj.scheduled_start.isoformat() if session_obj.scheduled_start else "",
+                "session_name": session_obj.name,
                 "status": record.status,
                 "checked_in_at": record.checked_in_at.isoformat() if record.checked_in_at else "",
                 "risk_score": record.risk_score if record.risk_score is not None else 0.0
@@ -279,7 +281,8 @@ def export_session_attendance(
         ])
 
     output.seek(0)
-    filename = f"session_export_{session_obj.session_date.isoformat()}.csv"
+    session_date_str = session_obj.scheduled_start.isoformat() if session_obj.scheduled_start else "session"
+    filename = f"session_export_{session_date_str}.csv"
 
     return StreamingResponse(
         iter([output.getvalue()]),

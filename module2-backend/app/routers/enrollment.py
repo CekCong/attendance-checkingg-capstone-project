@@ -2,11 +2,10 @@ from sqlalchemy import or_
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, func, create_engine
 from sqlalchemy.dialects.postgresql import UUID
-from typing import Any, Dict
 from sqlalchemy.orm import declarative_base, Session, relationship, sessionmaker
 from security import get_current_user
 import os
@@ -381,11 +380,6 @@ def get_course_enrollments(
         total_enrolled=len(students_data),
         students=students_data
     )
-
-import uuid
-from typing import Any, Dict
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy.orm import Session
 
 @router.delete("/{enrollment_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_enrollment(
