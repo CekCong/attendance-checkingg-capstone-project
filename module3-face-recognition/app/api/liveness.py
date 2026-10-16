@@ -5,8 +5,6 @@
     Perform liveness detection on submitted image.
     Take in a base64 encoded image, and challenge type (blink, head_turn, passive), returns face embedding hash and liveness score.
 
-
-    TODO: Implement the following:
     1. Decode base64 image to numpy array
     2. Detect face using MediaPipe FaceDetection
     3. If no face detected, return with liveness_passed=False

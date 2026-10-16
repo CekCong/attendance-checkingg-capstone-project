@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -8,16 +9,25 @@ from app.api.face import router as face_router
 from app.api.liveness import router as liveness_router
 from app.api.risk import router as risk_router
 from app.api.health import router as health_router
+from app.services.arc_face import get_arcface_model
 
 SERVICE_TITLE = "SAIV Face Recognition Service"
 SERVICE_DESCRIPTION = "Face enrollment, verification, liveness detection, and risk scoring service"
 SERVICE_VERSION = "1.0.0"
 DEFAULT_CORS_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load ArcFace before reporting the service as ready."""
+    get_arcface_model()
+    yield
+
 app = FastAPI(
     title=SERVICE_TITLE,
     description=SERVICE_DESCRIPTION,
     version=SERVICE_VERSION,
+    lifespan=lifespan,
 )
 
 

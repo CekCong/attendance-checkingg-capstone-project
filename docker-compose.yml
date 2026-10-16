@@ -81,11 +81,18 @@ services:
       - "8001:8001"
     environment:
       REDIS_URL: redis://redis:6379
+      IPINFO_TOKEN: d6f7dc03defe84
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
       - ./module3-face-recognition/app:/app/app
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "/app/app"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
     develop:
       watch:
         - action: rebuild

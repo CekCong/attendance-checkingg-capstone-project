@@ -424,13 +424,21 @@ def active_response(
     reference_match_scores,
     details=None,
     error=None,
+    action_score=0.0,
 ):
-    passed = same_person and correct_person and action_detected
+    action_score = round(max(0.0, min(float(action_score), 1.0)), 4)
+    passed = (
+        same_person
+        and correct_person
+        and action_detected
+        and action_score >= LIVENESS_THRESHOLD
+    )
     response_details = {
         "challenge_type": challenge_type,
         "same_person_across_frames": same_person,
         "all_frames_match_reference": correct_person,
         "action_detected": action_detected,
+        "action_score": action_score,
     }
     if similarities is not None:
         response_details["face_similarity_scores"] = [round(score, 4) for score in similarities]
@@ -447,7 +455,7 @@ def active_response(
     face_hash = generate_face_hash(embeddings[0]) if embeddings else ""
     return LivenessResponse(
         liveness_passed=passed,
-        liveness_score=1.0 if passed else 0.0,
+        liveness_score=action_score if same_person and correct_person else 0.0,
         liveness_threshold=LIVENESS_THRESHOLD,
         face_embedding_hash=face_hash,
         details=response_details,
@@ -521,6 +529,7 @@ def blink_liveness_check(request):
         eye_states.append(average_ear >= EAR_THRESHOLD)
 
     blink_detected = contains_sequence(eye_states, [True, False, True])
+    blink_score = 1.0 if blink_detected else 0.5
     return active_response(
         "blink",
         blink_detected,
@@ -530,6 +539,7 @@ def blink_liveness_check(request):
         similarities,
         reference_match_scores,
         {"blink_detected": blink_detected, "eye_states": eye_states, "ear_values": ear_values},
+        action_score=blink_score,
     )
 
 
@@ -568,11 +578,16 @@ def head_turn_liveness_check(request):
     turn_ratios = [head_turn_ratio(landmarks) for landmarks in landmarks_per_frame]
     starts_centered = abs(turn_ratios[0]) <= HEAD_CENTER_RATIO_THRESHOLD
     ends_centered = abs(turn_ratios[-1]) <= HEAD_CENTER_RATIO_THRESHOLD
-    turned_between = any(
-        abs(ratio) >= HEAD_TURN_RATIO_THRESHOLD
-        for ratio in turn_ratios[1:-1]
+    maximum_turn_ratio = max(
+        (abs(ratio) for ratio in turn_ratios[1:-1]),
+        default=0.0,
     )
-    head_turn_detected = starts_centered and turned_between and ends_centered
+    head_turn_score = min(maximum_turn_ratio / HEAD_TURN_RATIO_THRESHOLD, 1.0)
+    head_turn_detected = (
+        starts_centered
+        and ends_centered
+        and head_turn_score >= LIVENESS_THRESHOLD
+    )
 
     return active_response(
         "head_turn",
@@ -586,6 +601,7 @@ def head_turn_liveness_check(request):
             "head_turn_detected": head_turn_detected,
             "head_turn_ratios": [round(ratio, 4) for ratio in turn_ratios],
         },
+        action_score=head_turn_score,
     )
 
 def smile_ratio(landmarks):
@@ -622,12 +638,21 @@ def smile_liveness_check(request):
 
     smile_ratios = [smile_ratio(landmarks) for landmarks in landmarks_per_frame]
     neutral_ratio = (smile_ratios[0] + smile_ratios[-1]) / 2.0
-    smiled_between = any(
-        ratio >= neutral_ratio * SMILE_INCREASE_RATIO
-        for ratio in smile_ratios[1:-1]
+    maximum_smile_ratio = max(smile_ratios[1:-1], default=neutral_ratio)
+    relative_increase = maximum_smile_ratio / neutral_ratio if neutral_ratio else 1.0
+    smile_score = max(
+        0.0,
+        min(
+            (relative_increase - 1.0) / (SMILE_INCREASE_RATIO - 1.0),
+            1.0,
+        ),
     )
     returned_to_neutral = abs(smile_ratios[-1] - smile_ratios[0]) <= smile_ratios[0] * 0.10
-    smile_detected = neutral_ratio > 0 and smiled_between and returned_to_neutral
+    smile_detected = (
+        neutral_ratio > 0
+        and returned_to_neutral
+        and smile_score >= LIVENESS_THRESHOLD
+    )
 
     return active_response(
         "smile",
@@ -640,6 +665,8 @@ def smile_liveness_check(request):
         {
             "smile_detected": smile_detected,
             "smile_ratios": [round(ratio, 4) for ratio in smile_ratios],
+            "smile_relative_increase": round(relative_increase, 4),
         },
+        action_score=smile_score,
     )
 
