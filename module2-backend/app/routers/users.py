@@ -6,6 +6,9 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum, create_engine, func, or_
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 import enum
+import os
+import httpx
+from models import UserModel as User
 
 from app.security import get_current_user, require_roles
 
@@ -29,23 +32,6 @@ class UserRole(str, enum.Enum):
     ta = "ta"
     admin = "admin"
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(String(36), primary_key=True)
-    email = Column(String(255), unique=True, nullable=False)
-    full_name = Column(String(255), nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    role = Column(SQLEnum(UserRole), nullable=False)
-    is_active = Column(Boolean, nullable=False, default=True)
-    camera_consent = Column(Boolean, default=False)
-    geolocation_consent = Column(Boolean, default=False)
-    face_embedding_hash = Column(String(64), nullable=True)
-    face_enrolled = Column(Boolean, default=False)
-    created_at = Column(DateTime, nullable=False, server_default=func.now())
-    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
-    last_login_at = Column(DateTime, nullable=True)
-    scheduled_deletion_at = Column(DateTime, nullable=True)
 
 # --- Pydantic Schemas ---
 class UpdateMeBody(BaseModel):
@@ -100,27 +86,48 @@ class UserListResponse(BaseModel):
     limit: int
     offset: int
 
+
+
 # Stub for external face recognition service processing
-def process_face_enrollment(image_base64: str) -> tuple[str, float]:
-    """
-    Mock integration for face recognition service.
-    Returns: (embedding_hash, quality_score)
-    
-    Raises:
-        HTTPException 400 if no face detected
-        HTTPException 503 if service unavailable
-    """
-    if not image_base64:
+FACE_SERVICE_URL = os.getenv(
+    "FACE_SERVICE_URL", "http://localhost:8001"
+).rstrip("/")
+
+
+def process_face_enrollment(image_base64: str, user_id: str) -> tuple[str, float]:
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.post(
+                f"{FACE_SERVICE_URL}/face/enroll",
+                json={
+                    "user_id": user_id,
+                    "image": image_base64,
+                    "camera_consent": True,
+                },
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Face recognition service unavailable",
+        ) from exc
+
+    if response.status_code == 400:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No face detected"
+            detail="Face image could not be enrolled",
         )
-    # Stub values representing successful service execution
-    return "hash_stub_1234567890abcdef", 0.85
 
-# --- Router Implementation (app/routers/users.py) ---
+    try:
+        response.raise_for_status()
+        result = response.json()
+        return result["face_template_hash"], result["quality_score"]
+    except (httpx.HTTPStatusError, ValueError, KeyError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Face recognition service returned an invalid response",
+        ) from exc
+
 router = APIRouter(prefix="/users", tags=["users"])
-
 
 # GET /users/me
 @router.get("/me", response_model=UserResponse)
@@ -176,7 +183,7 @@ def enroll_face(
         )
 
     # Call face recognition service stub
-    embedding_hash, quality_score = process_face_enrollment(body.image)
+    embedding_hash, quality_score = process_face_enrollment(body.image, user.id)
 
     # Update database record upon successful processing
     user.face_embedding_hash = embedding_hash
