@@ -1,6 +1,6 @@
 from sqlalchemy import Column, String, Boolean, Integer, Float, Text, DateTime, Enum, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.sql import func
-from database import Base
+from .database import Base
 
 class UserModel(Base):
     __tablename__ = "users"

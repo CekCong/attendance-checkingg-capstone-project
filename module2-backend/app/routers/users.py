@@ -3,27 +3,14 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum, create_engine, func, or_
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
 import enum
-import os
-import httpx
-from models import UserModel as User
 
-from app.security import get_current_user, require_roles
-
-# --- Database & Base Setup ---
-DATABASE_URL = "postgresql://postgres:password@localhost:5432/postgres"
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+from ..database import get_db
+from ..models import UserModel as User
+from ..security import get_current_user, require_roles
+from ..services.face_client import FaceServiceError, enroll_face as enroll_face_with_service
 
 # --- SQLAlchemy Model ---
 class UserRole(str, enum.Enum):
@@ -88,40 +75,26 @@ class UserListResponse(BaseModel):
 
 
 
-# Stub for external face recognition service processing
-FACE_SERVICE_URL = os.getenv(
-    "FACE_SERVICE_URL", "http://localhost:8001"
-).rstrip("/")
-
-
-def process_face_enrollment(image_base64: str, user_id: str) -> tuple[str, float]:
+async def process_face_enrollment(
+    image_base64: str,
+    user_id: str,
+    camera_consent: bool,
+) -> tuple[str, float]:
     try:
-        with httpx.Client(timeout=15) as client:
-            response = client.post(
-                f"{FACE_SERVICE_URL}/face/enroll",
-                json={
-                    "user_id": user_id,
-                    "image": image_base64,
-                    "camera_consent": True,
-                },
-            )
-    except httpx.RequestError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Face recognition service unavailable",
-        ) from exc
-
-    if response.status_code == 400:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Face image could not be enrolled",
+        result = await enroll_face_with_service(
+            user_id=user_id,
+            image=image_base64,
+            camera_consent=camera_consent,
         )
-
-    try:
-        response.raise_for_status()
-        result = response.json()
-        return result["face_template_hash"], result["quality_score"]
-    except (httpx.HTTPStatusError, ValueError, KeyError) as exc:
+        if not result.get("enrollment_successful"):
+            raise FaceServiceError(400, "Face image could not be enrolled")
+        return str(result["face_template_hash"]), float(result["quality_score"])
+    except FaceServiceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail,
+        ) from exc
+    except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Face recognition service returned an invalid response",
@@ -166,7 +139,7 @@ def update_me(
 
 # POST /users/me/face/enroll
 @router.post("/me/face/enroll", response_model=FaceEnrollResponse)
-def enroll_face(
+async def enroll_face(
     body: FaceEnrollBody,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -182,8 +155,11 @@ def enroll_face(
             detail="Camera consent not given"
         )
 
-    # Call face recognition service stub
-    embedding_hash, quality_score = process_face_enrollment(body.image, user.id)
+    embedding_hash, quality_score = await process_face_enrollment(
+        body.image,
+        str(user.id),
+        user.camera_consent,
+    )
 
     # Update database record upon successful processing
     user.face_embedding_hash = embedding_hash

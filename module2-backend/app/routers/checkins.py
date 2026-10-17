@@ -1,9 +1,10 @@
 import uuid
 import os
 import math
+import json
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import Column, String, Float, Boolean, DateTime, JSON, ForeignKey, Enum as SQLEnum, create_engine, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -13,7 +14,13 @@ import enum
 
 
 
-from security import get_current_user
+from ..security import get_current_user
+from ..services.face_client import (
+    FaceServiceError,
+    assess_risk,
+    check_liveness,
+    verify_face,
+)
 
 # Environment Configuration & Database Setup
 
@@ -62,7 +69,7 @@ class Course(Base):
     code = Column(String(50), nullable=False)
     name = Column(String(255), nullable=False)
 
-from models import SessionModel, UserModel as User
+from ..models import CheckinModel, DeviceModel, SessionModel, UserModel as User
 
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
@@ -132,6 +139,9 @@ class CheckinResponse(BaseModel):
     distance_from_venue_meters: Optional[float] = None
     liveness_passed: Optional[bool] = None
     liveness_score: Optional[float] = None
+    liveness_challenge_type: Optional[str] = None
+    face_match_passed: Optional[bool] = None
+    face_match_score: Optional[float] = None
     risk_score: float
     risk_factors: List[RiskFactor] = Field(default_factory=list)
     appeal_reason: Optional[str] = None
@@ -496,8 +506,9 @@ def list_checkins(
 
 # POST /checkins/ - Student check-in to a session
 @router.post("/", response_model=CheckinResponse, status_code=status.HTTP_201_CREATED)
-def create_checkin(
+async def create_checkin(
     payload: CheckinCreate,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -507,9 +518,10 @@ def create_checkin(
             detail="Access denied. Only students can perform check-ins."
         )
 
-    student_id = uuid.UUID(str(current_user.get("id")))
+    student_id = str(current_user.get("id"))
+    session_id = str(payload.session_id)
 
-    session_obj = db.query(SessionModel).filter(SessionModel.id == payload.session_id).first()
+    session_obj = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not session_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -524,17 +536,24 @@ def create_checkin(
 
     now = datetime.now(timezone.utc)
 
-    if now < session_obj.checkin_opens_at or now > session_obj.checkin_closes_at:
+    checkin_opens_at = session_obj.checkin_opens_at
+    checkin_closes_at = session_obj.checkin_closes_at
+    if checkin_opens_at.tzinfo is None:
+        checkin_opens_at = checkin_opens_at.replace(tzinfo=timezone.utc)
+    if checkin_closes_at.tzinfo is None:
+        checkin_closes_at = checkin_closes_at.replace(tzinfo=timezone.utc)
+
+    if now < checkin_opens_at or now > checkin_closes_at:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Check-in window is closed for this session."
         )
 
     existing_checkin = (
-        db.query(AttendanceRecord)
+        db.query(CheckinModel)
         .filter(
-            AttendanceRecord.session_id == payload.session_id,
-            AttendanceRecord.student_id == student_id
+            CheckinModel.session_id == session_id,
+            CheckinModel.student_id == student_id
         )
         .first()
     )
@@ -550,14 +569,17 @@ def create_checkin(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid QR code provided for this session."
             )
-        if session_obj.qr_code_expires_at and now > session_obj.qr_code_expires_at:
+        qr_expires_at = session_obj.qr_code_expires_at
+        if qr_expires_at and qr_expires_at.tzinfo is None:
+            qr_expires_at = qr_expires_at.replace(tzinfo=timezone.utc)
+        if qr_expires_at and now > qr_expires_at:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="QR code for this session has expired."
             )
 
-    risk_factors = []
-    total_risk = 0.0
+    risk_factors: List[Dict[str, Any]] = []
+    local_risk = 0.0
     distance_meters = None
     geofence_exceeded_critical = False
 
@@ -574,31 +596,160 @@ def create_checkin(
         if distance_meters > (2 * max_radius):
             geofence_exceeded_critical = True
             risk_factors.append({"type": "critical_geofence_exceeded", "severity": "high", "weight": 1.0})
-            total_risk += 1.0
+            local_risk = 1.0
         elif distance_meters > max_radius:
             risk_factors.append({"type": "geo_out_of_bounds", "severity": "high", "weight": 0.40})
-            total_risk += 0.40
+            local_risk = max(local_risk, 0.40)
 
     liveness_passed = None
     liveness_score = None
+    face_match_passed = None
+    face_match_score = None
+    face_embedding_hash = None
+    module3_unavailable = False
 
-    if session_obj.require_liveness_check:
+    student = db.query(User).filter(User.id == student_id).first()
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    device = (
+        db.query(DeviceModel)
+        .filter(
+            DeviceModel.device_fingerprint == payload.device_fingerprint,
+            DeviceModel.user_id == student_id,
+            DeviceModel.is_active.is_(True),
+        )
+        .first()
+    )
+
+    if payload.liveness_challenge_response:
+        try:
+            liveness_result = await check_liveness(
+                payload.liveness_challenge_response,
+                challenge_type="passive",
+                reference_template_hash=student.face_embedding_hash,
+            )
+            liveness_passed = bool(liveness_result["liveness_passed"])
+            liveness_score = float(liveness_result["liveness_score"])
+            face_embedding_hash = liveness_result.get("face_embedding_hash")
+        except FaceServiceError as exc:
+            if exc.status_code < 500:
+                raise HTTPException(exc.status_code, exc.detail) from exc
+            module3_unavailable = True
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Face recognition service returned an invalid liveness response",
+            ) from exc
+    elif session_obj.require_liveness_check:
+        liveness_passed = False
+        liveness_score = 0.0
+
+    if session_obj.require_liveness_check and liveness_passed is False:
+        risk_factors.append({"type": "liveness_failed", "severity": "high", "weight": 1.0})
+        local_risk = 1.0
+
+    if session_obj.require_face_match:
         if not payload.liveness_challenge_response:
-            liveness_passed = False
-            liveness_score = 0.0
-            risk_factors.append({"type": "liveness_failed", "severity": "high", "weight": 1.0})
-            total_risk += 1.0
+            face_match_passed = False
+            face_match_score = 0.0
+        elif not student.face_enrolled or not student.face_embedding_hash:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Face enrollment is required for this session.",
+            )
         else:
-            liveness_passed = True
-            liveness_score = 0.92
+            try:
+                face_result = await verify_face(
+                    payload.liveness_challenge_response,
+                    student.face_embedding_hash,
+                )
+                face_match_passed = bool(face_result["match_passed"])
+                face_match_score = float(face_result["match_score"])
+                face_embedding_hash = face_result.get("current_template_hash")
+            except FaceServiceError as exc:
+                if exc.status_code < 500:
+                    raise HTTPException(exc.status_code, exc.detail) from exc
+                module3_unavailable = True
+            except (KeyError, TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Face recognition service returned an invalid verification response",
+                ) from exc
 
-    if payload.device_fingerprint == "unknown_device":
+        if face_match_passed is False:
+            risk_factors.append({"type": "face_match_failed", "severity": "high", "weight": 1.0})
+            local_risk = 1.0
+
+    if device is None:
         risk_factors.append({"type": "device_unknown", "severity": "medium", "weight": 0.15})
-        total_risk += 0.15
+        local_risk = max(local_risk, 0.15)
 
-    total_risk = round(min(total_risk, 1.0), 2)
+    module3_risk = 0.0
+    if not module3_unavailable:
+        try:
+            risk_result = await assess_risk(
+                liveness_score=(
+                    liveness_score
+                    if liveness_score is not None
+                    else (0.0 if session_obj.require_liveness_check else 1.0)
+                ),
+                face_match_score=(
+                    face_match_score
+                    if face_match_score is not None
+                    else (0.0 if session_obj.require_face_match else 1.0)
+                ),
+                device_public_key=device.public_key if device else None,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                latitude=payload.latitude,
+                longitude=payload.longitude,
+                accuracy=payload.location_accuracy_meters,
+            )
+            module3_risk = float(risk_result["risk_score"])
+            for signal_name, signal_risk in risk_result.get("signal_breakdown", {}).items():
+                signal_risk = float(signal_risk)
+                if signal_risk <= 0:
+                    continue
+                severity = (
+                    "high"
+                    if signal_risk >= 0.7
+                    else "medium"
+                    if signal_risk >= 0.3
+                    else "low"
+                )
+                risk_factors.append({
+                    "type": f"{signal_name}_risk",
+                    "severity": severity,
+                    "weight": round(signal_risk, 4),
+                })
+        except FaceServiceError as exc:
+            if exc.status_code < 500:
+                raise HTTPException(exc.status_code, exc.detail) from exc
+            module3_unavailable = True
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Face recognition service returned an invalid risk response",
+            ) from exc
 
-    if liveness_passed is False or geofence_exceeded_critical:
+    if module3_unavailable:
+        risk_factors.append({
+            "type": "face_service_unavailable",
+            "severity": "high",
+            "weight": 0.50,
+        })
+        local_risk = max(local_risk, 0.50)
+
+    total_risk = round(min(max(local_risk, module3_risk), 1.0), 4)
+
+    if (
+        (session_obj.require_liveness_check and liveness_passed is False)
+        or geofence_exceeded_critical
+    ):
         checkin_status = CheckinStatus.rejected
     else:
         threshold = session_obj.risk_threshold or 0.50
@@ -607,25 +758,48 @@ def create_checkin(
         else:
             checkin_status = CheckinStatus.approved
 
-    new_record = AttendanceRecord(
-        id=uuid.uuid4(),
-        session_id=payload.session_id,
+    new_record = CheckinModel(
+        id=str(uuid.uuid4()),
+        session_id=session_id,
         student_id=student_id,
+        device_id=device.id if device else None,
         status=checkin_status.value,
         checked_in_at=now,
         latitude=payload.latitude,
         longitude=payload.longitude,
         location_accuracy_meters=payload.location_accuracy_meters,
-        device_fingerprint=payload.device_fingerprint,
         distance_from_venue_meters=distance_meters,
         liveness_passed=liveness_passed,
         liveness_score=liveness_score,
+        liveness_challenge_type=(
+            "passive" if payload.liveness_challenge_response else None
+        ),
+        face_match_passed=face_match_passed,
+        face_match_score=face_match_score,
+        face_embedding_hash=face_embedding_hash,
         risk_score=total_risk,
-        risk_factors=risk_factors
+        risk_factors=json.dumps(risk_factors),
+        qr_code_verified=bool(session_obj.qr_code_secret),
     )
 
     db.add(new_record)
     db.commit()
     db.refresh(new_record)
 
-    return new_record
+    return {
+        "id": new_record.id,
+        "session_id": new_record.session_id,
+        "student_id": new_record.student_id,
+        "status": new_record.status,
+        "checked_in_at": new_record.checked_in_at,
+        "latitude": new_record.latitude,
+        "longitude": new_record.longitude,
+        "distance_from_venue_meters": new_record.distance_from_venue_meters,
+        "liveness_passed": new_record.liveness_passed,
+        "liveness_score": new_record.liveness_score,
+        "liveness_challenge_type": new_record.liveness_challenge_type,
+        "face_match_passed": new_record.face_match_passed,
+        "face_match_score": new_record.face_match_score,
+        "risk_score": new_record.risk_score,
+        "risk_factors": risk_factors,
+    }
