@@ -43,6 +43,10 @@ export function InstructorDashboard() {
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [created, setCreated] = useState<string | null>(null);
+  const [newCourseCode, setNewCourseCode] = useState("");
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditAction, setAuditAction] = useState("all");
+  const [auditResult, setAuditResult] = useState("all");
 
   const load = useCallback(async () => {
     try {
@@ -73,6 +77,39 @@ export function InstructorDashboard() {
     return data.records.filter((row) => row.sessionId === selectedSession);
   }, [data, selectedSession]);
 
+  const auditActions = useMemo(() => {
+    if (!data) return [];
+
+    return Array.from(
+      new Set(data.auditLogs.map((log) => log.action)),
+    ).sort();
+  }, [data]);
+
+  const filteredAuditLogs = useMemo(() => {
+    if (!data) return [];
+
+    const search = auditSearch.trim().toLowerCase();
+
+    return data.auditLogs.filter((log) => {
+      const matchesSearch =
+        !search ||
+        log.userEmail.toLowerCase().includes(search) ||
+        log.action.toLowerCase().includes(search) ||
+        log.resourceType.toLowerCase().includes(search) ||
+        log.resourceId.toLowerCase().includes(search);
+
+      const matchesAction =
+        auditAction === "all" || log.action === auditAction;
+
+      const matchesResult =
+        auditResult === "all" ||
+        (auditResult === "success" && log.success) ||
+        (auditResult === "failed" && !log.success);
+
+      return matchesSearch && matchesAction && matchesResult;
+    });
+  }, [data, auditSearch, auditAction, auditResult]);
+
   function exportRecords(format: "csv" | "json") {
     const stamp = new Date().toISOString().slice(0, 10);
     if (format === "csv") {
@@ -84,7 +121,122 @@ export function InstructorDashboard() {
       JSON.stringify(attendanceToJson(filteredRecords), null, 2),
       "application/json",
     );
-  }
+  };
+
+  function reviewCheckin(
+    checkinId: string,
+    decision: "approved" | "rejected",
+  ) {
+    setData((current) => {
+      if (!current) return current;
+
+      const reviewedItem = current.flagged.find(
+        (item) => item.id === checkinId,
+      );
+
+      const updatedRecords = current.records.map((record) =>
+        record.checkinId === checkinId
+          ? { ...record, status: decision }
+          : record,
+      );
+
+      const updatedFlagged = current.flagged.filter(
+        (item) => item.id !== checkinId,
+      );
+
+      const approvedCount = updatedRecords.filter(
+        (record) => record.status === "approved",
+      ).length;
+
+      const newAuditLog = {
+        id: `audit-${Date.now()}`,
+        userEmail: "instructor@saiv.local",
+        action: "checkin_reviewed",
+        resourceType: "checkin",
+        resourceId: checkinId,
+        success: true,
+        timestamp: new Date().toISOString(),
+        details: {
+          decision,
+          student: reviewedItem?.studentName ?? "Unknown student",
+        },
+      };
+
+      return {
+        ...current,
+
+        flagged: updatedFlagged,
+        records: updatedRecords,
+
+        auditLogs: [
+          newAuditLog,
+          ...current.auditLogs,
+        ],
+
+        kpis: {
+          ...current.kpis,
+          flaggedPending: updatedFlagged.length,
+          approvalRate:
+            updatedRecords.length > 0
+              ? approvedCount / updatedRecords.length
+              : 0,
+        },
+      };
+    });
+  };
+
+  function createSession() {
+    const title = newTitle.trim();
+    const courseCode = newCourseCode.trim();
+
+    if (!title || !courseCode) return;
+
+    const newSession: InstructorSession = {
+      id: `session-${Date.now()}`,
+      title,
+      courseCode,
+      status: "scheduled",
+      enrolled: 0,
+      checkins: 0,
+      flagged: 0,
+    };
+
+    const newAuditLog = {
+      id: `audit-${Date.now()}`,
+      userEmail: "instructor@saiv.local",
+      action: "session_created",
+      resourceType: "session",
+      resourceId: newSession.id,
+      success: true,
+      timestamp: new Date().toISOString(),
+      details: {
+        courseCode,
+        title,
+      },
+    };
+
+    setData((current) => {
+      if (!current) return current;
+
+      return {
+        ...current,
+
+        todaySessions: [
+          ...current.todaySessions,
+          newSession,
+        ],
+
+        auditLogs: [
+          newAuditLog,
+          ...current.auditLogs,
+        ],
+      };
+    });
+
+    setCreated(title);
+    setNewTitle("");
+    setNewCourseCode("");
+  };
 
   return (
     <div className="w-full max-w-6xl space-y-4 px-4 py-6 animate-fade-up sm:px-6 sm:py-8">
@@ -132,10 +284,16 @@ export function InstructorDashboard() {
               className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]"
               onSubmit={(e) => {
                 e.preventDefault();
-                setCreated(newTitle.trim() || "Untitled session");
-                setNewTitle("");
+                createSession();
               }}
             >
+              <input
+                value={newCourseCode}
+                onChange={(e) => setNewCourseCode(e.target.value)}
+                placeholder="Course code"
+                className="rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none placeholder:text-white/40"
+              />
+
               <input
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
@@ -146,7 +304,7 @@ export function InstructorDashboard() {
                 Create
               </button>
             </form>
-            {created && <p className="mt-2 text-sm text-emerald-200">Queued: {created}</p>}
+            {created && <p className="mt-2 text-sm text-emerald-200">Created: {created}</p>}
           </GlassCard>
         </section>
 
@@ -174,10 +332,10 @@ export function InstructorDashboard() {
                     </span>
                   </div>
                   <div className="mt-2 flex gap-2">
-                    <button type="button" className="rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-sky-950">
+                    <button type="button" onClick={() => reviewCheckin(item.id, "approved")} className="rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-sky-950">
                       Approve
                     </button>
-                    <button type="button" className="rounded-lg border border-white/30 px-2.5 py-1 text-xs text-white">
+                    <button type="button" onClick={() => reviewCheckin(item.id, "rejected")} className="rounded-lg border border-white/30 px-2.5 py-1 text-xs text-white">
                       Reject
                     </button>
                   </div>
@@ -265,6 +423,130 @@ export function InstructorDashboard() {
               <RecordsTable records={filteredRecords} />
             </div>
           )}
+        </GlassCard>
+      </details>
+      <details className="group">
+        <summary className="cursor-pointer list-none">
+          <GlassCard className="p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-display text-xl font-semibold text-white">
+                  Audit log explorer
+                </h2>
+                <p className="mt-1 text-sm text-white/70">
+                  Review security and attendance events recorded by the system.
+                </p>
+              </div>
+
+              <span className="text-sm text-white/60 group-open:hidden">
+                Show
+              </span>
+
+              <span className="hidden text-sm text-white/60 group-open:inline">
+                Hide
+              </span>
+            </div>
+          </GlassCard>
+        </summary>
+
+        <GlassCard className="mt-3 p-5 sm:p-6">
+
+          <div className="flex flex-wrap gap-3">
+
+            <input
+              value={auditSearch}
+              onChange={(e) => setAuditSearch(e.target.value)}
+              placeholder="Search logs..."
+              className="min-w-[220px] flex-1 rounded-xl border border-white/25 bg-white/10 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40"
+            />
+
+            <select
+              value={auditAction}
+              onChange={(e) => setAuditAction(e.target.value)}
+              className="rounded-xl border border-white/25 bg-sky-950/80 px-3 py-2 text-sm text-white"
+            >
+              <option value="all">All actions</option>
+
+              {auditActions.map((action) => (
+                <option key={action} value={action}>
+                  {action}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={auditResult}
+              onChange={(e) => setAuditResult(e.target.value)}
+              className="rounded-xl border border-white/25 bg-sky-950/80 px-3 py-2 text-sm text-white"
+            >
+              <option value="all">All results</option>
+              <option value="success">Success</option>
+              <option value="failed">Failed</option>
+            </select>
+
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full text-left text-sm text-white/85">
+
+              <thead className="text-xs uppercase tracking-wide text-white/55">
+                <tr>
+                  <th className="py-2 pr-4">Time</th>
+                  <th className="py-2 pr-4">User</th>
+                  <th className="py-2 pr-4">Action</th>
+                  <th className="py-2 pr-4">Resource</th>
+                  <th className="py-2">Result</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {filteredAuditLogs.map((log) => (
+                  <tr key={log.id} className="border-t border-white/10">
+
+                    <td className="whitespace-nowrap py-3 pr-4">
+                      {new Date(log.timestamp).toLocaleString()}
+                    </td>
+
+                    <td className="py-3 pr-4">
+                      {log.userEmail}
+                    </td>
+
+                    <td className="py-3 pr-4 font-medium text-white">
+                      {log.action}
+                    </td>
+
+                    <td className="py-3 pr-4">
+                      <p>{log.resourceType}</p>
+                      <p className="text-xs text-white/50">
+                        {log.resourceId}
+                      </p>
+                    </td>
+
+                    <td className="py-3">
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                          log.success
+                            ? "bg-emerald-300/90 text-emerald-950"
+                            : "bg-rose-300/90 text-rose-950"
+                        }`}
+                      >
+                        {log.success ? "SUCCESS" : "FAILED"}
+                      </span>
+                    </td>
+
+                  </tr>
+                ))}
+              </tbody>
+
+            </table>
+
+            {filteredAuditLogs.length === 0 && (
+              <p className="py-6 text-center text-sm text-white/60">
+                No audit logs match these filters.
+              </p>
+            )}
+          </div>
+
         </GlassCard>
       </details>
     </div>
