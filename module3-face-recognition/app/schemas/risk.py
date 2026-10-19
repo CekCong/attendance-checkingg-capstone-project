@@ -4,13 +4,13 @@
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, IPvAnyAddress
 
 class GeolocationData(BaseModel):
     """Geolocation data for risk assessment."""
-    latitude: float
-    longitude: float
-    accuracy: float
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy: float = Field(ge=0, le=5000)
 
 
 class RiskAssessRequest(BaseModel):
@@ -19,6 +19,7 @@ class RiskAssessRequest(BaseModel):
     face_match_score: Optional[float] = None
     device_signature: Optional[str] = None
     device_public_key: Optional[str] = None
+    device_challenge: Optional[str] = None
     ip_address: Optional[str] = None
     user_agent: Optional[str] = None
     geolocation: Optional[GeolocationData] = None
