@@ -9,7 +9,9 @@ import enum
 import os
 from dotenv import load_dotenv
 
-from security import get_current_user
+from app.security import get_current_user
+from app.models import CourseModel as Course, SessionModel, EnrollmentModel as CourseEnrollment, CheckinModel as AttendanceRecord
+from app.database import get_db
 
 # --- Database & Base Setup ---
 load_dotenv()
@@ -38,26 +40,6 @@ class SessionStatus(str, enum.Enum):
     active = "active"
     closed = "closed"
     cancelled = "cancelled"
-
-from models import CourseModel as Course, SessionModel
-
-class CourseEnrollment(Base):
-    __tablename__ = "course_enrollments"
-
-    id = Column(String(36), primary_key=True)
-    course_id = Column(String(36), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
-    student_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-
-class AttendanceRecord(Base):
-    __tablename__ = "attendance_records"
-
-    id = Column(String(36), primary_key=True)
-    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
-    student_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    status = Column(String(50), default="checked_in")
-
-
-    course = relationship("Course", backref="sessions")
 
 # --- Pydantic Schemas ---
 class SessionCreate(BaseModel):
@@ -182,7 +164,7 @@ class SessionResponse(BaseModel):
 router = APIRouter(prefix="/sessions", tags=["Session Management"])
 
 # POST /sessions - Create session (instructor only)
-@router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 def create_session(
     payload: SessionCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -201,7 +183,19 @@ def create_session(
             detail=f"Course with ID '{payload.course_id}' not found."
         )
 
-    if current_user.get("role") != "admin" and course.instructor_id != current_user.get("id"):
+    assigned_session = (
+        db.query(SessionModel)
+        .filter(
+            SessionModel.course_id == course.id,
+            SessionModel.instructor_id.isnot(None),
+        )
+        .first()
+    )
+    if (
+        current_user.get("role") != "admin"
+        and assigned_session
+        and assigned_session.instructor_id != current_user.get("id")
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You can only create sessions for courses you teach."

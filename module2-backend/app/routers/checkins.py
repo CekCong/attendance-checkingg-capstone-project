@@ -1,20 +1,15 @@
 import uuid
-import os
 import math
 import json
+import enum
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import Column, String, Float, Boolean, DateTime, JSON, ForeignKey, Enum as SQLEnum, create_engine, func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
-from dotenv import load_dotenv
-import enum
-
-
-
+from pydantic import BaseModel, Field, ConfigDict, field_validator
+from sqlalchemy.orm import Session
 from ..security import get_current_user
+from ..database import get_db as shared_get_db
+from ..models import CheckinModel, DeviceModel, SessionModel, UserModel as User
 from ..services.face_client import (
     FaceServiceError,
     assess_risk,
@@ -22,26 +17,10 @@ from ..services.face_client import (
     verify_face,
 )
 
-# Environment Configuration & Database Setup
-
-load_dotenv()
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://postgres:your_password@localhost:5432/your_database"
-)
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base = declarative_base()
+AttendanceRecord = CheckinModel
 
 def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    yield from shared_get_db()
 
 # --- Enums ---
 class CheckinStatus(str, enum.Enum):
@@ -61,43 +40,6 @@ class ReviewStatus(str, enum.Enum):
     approved = "approved"
     rejected = "rejected"
 
-# --- SQLAlchemy Models ---
-class Course(Base):
-    __tablename__ = "courses"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    code = Column(String(50), nullable=False)
-    name = Column(String(255), nullable=False)
-
-from ..models import CheckinModel, DeviceModel, SessionModel, UserModel as User
-
-class AttendanceRecord(Base):
-    __tablename__ = "attendance_records"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
-    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    status = Column(String(50), nullable=False)
-    checked_in_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
-    location_accuracy_meters = Column(Float, nullable=True)
-    device_fingerprint = Column(String(255), nullable=True)
-    distance_from_venue_meters = Column(Float, nullable=True)
-    liveness_passed = Column(Boolean, nullable=True)
-    liveness_score = Column(Float, nullable=True)
-    risk_score = Column(Float, nullable=False, default=0.0)
-    risk_factors = Column(JSON, nullable=True, default=list)
-    appeal_reason = Column(String, nullable=True)
-    appealed_at = Column(DateTime(timezone=True), nullable=True)
-    reviewed_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    reviewed_at = Column(DateTime(timezone=True), nullable=True)
-    review_notes = Column(String, nullable=True)
-
-    session = relationship("SessionModel", backref="attendance_records")
-    student = relationship("User", foreign_keys=[student_id], backref="attendance_records")
-    reviewer = relationship("User", foreign_keys=[reviewed_by_id])
-
 # --- Helper Functions ---
 def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371000.0
@@ -116,10 +58,11 @@ class CheckinCreate(BaseModel):
     session_id: uuid.UUID
     latitude: float
     longitude: float
-    location_accuracy_meters: float
+    location_accuracy_meters: Optional[float] = None
     device_fingerprint: str
     liveness_challenge_response: Optional[str] = None
     qr_code: Optional[str] = None
+    face_image: Optional[str] = None  # Base64-encoded image for liveness check
 
 class RiskFactor(BaseModel):
     type: str
@@ -149,6 +92,11 @@ class CheckinResponse(BaseModel):
     reviewed_by_id: Optional[uuid.UUID] = None
     reviewed_at: Optional[datetime] = None
     review_notes: Optional[str] = None
+
+    @field_validator("risk_factors", mode="before")
+    @classmethod
+    def parse_risk_factors(cls, value):
+        return json.loads(value) if isinstance(value, str) else value or []
 
 class CheckinListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -196,6 +144,11 @@ class FlaggedCheckinItem(BaseModel):
     risk_factors: List[RiskFactor] = Field(default_factory=list)
     appeal_reason: Optional[str] = None
     appealed_at: Optional[datetime] = None
+
+    @field_validator("risk_factors", mode="before")
+    @classmethod
+    def parse_risk_factors(cls, value):
+        return json.loads(value) if isinstance(value, str) else value or []
 
 class AppealCreate(BaseModel):
     appeal_reason: str
@@ -247,9 +200,9 @@ def get_flagged_checkins(
     )
 
     if course_id:
-        query = query.filter(SessionModel.course_id == course_id)
+        query = query.filter(SessionModel.course_id == str(course_id))
     if session_id:
-        query = query.filter(AttendanceRecord.session_id == session_id)
+        query = query.filter(AttendanceRecord.session_id == str(session_id))
 
     records = query.order_by(AttendanceRecord.checked_in_at.desc()).limit(limit).all()
 
@@ -263,7 +216,7 @@ def get_flagged_checkins(
             status=CheckinStatus(rec.status),
             checked_in_at=rec.checked_in_at,
             risk_score=rec.risk_score,
-            risk_factors=rec.risk_factors or [],
+            risk_factors=json.loads(rec.risk_factors) if rec.risk_factors else [],
             appeal_reason=rec.appeal_reason,
             appealed_at=rec.appealed_at
         )
@@ -284,7 +237,7 @@ def get_my_checkins(
             detail="Access denied. Only students can access their check-in history."
         )
 
-    student_id = uuid.UUID(str(current_user.get("id")))
+    student_id = str(current_user.get("id"))
 
     query = (
         db.query(AttendanceRecord)
@@ -294,7 +247,7 @@ def get_my_checkins(
     )
 
     if course_id:
-        query = query.filter(SessionModel.course_id == course_id)
+        query = query.filter(SessionModel.course_id == str(course_id))
 
     records = query.order_by(AttendanceRecord.checked_in_at.desc()).limit(limit).all()
 
@@ -318,14 +271,14 @@ def get_checkin_detail(
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    record = db.query(AttendanceRecord).filter(AttendanceRecord.id == checkin_id).first()
+    record = db.query(AttendanceRecord).filter(AttendanceRecord.id == str(checkin_id)).first()
     if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Check-in with ID '{checkin_id}' not found."
         )
 
-    user_id = uuid.UUID(str(current_user.get("id")))
+    user_id = str(current_user.get("id"))
     user_role = current_user.get("role")
 
     is_owner = record.student_id == user_id
@@ -353,8 +306,8 @@ def appeal_checkin(
             detail="Access denied. Only students can appeal check-ins."
         )
 
-    student_id = uuid.UUID(str(current_user.get("id")))
-    record = db.query(AttendanceRecord).filter(AttendanceRecord.id == id).first()
+    student_id = str(current_user.get("id"))
+    record = db.query(AttendanceRecord).filter(AttendanceRecord.id == str(id)).first()
 
     if not record:
         raise HTTPException(
@@ -416,14 +369,14 @@ def review_checkin(
             detail="Access denied. Only instructors, TAs, or admins can review check-ins."
         )
 
-    record = db.query(AttendanceRecord).filter(AttendanceRecord.id == id).first()
+    record = db.query(AttendanceRecord).filter(AttendanceRecord.id == str(id)).first()
     if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Check-in with ID '{id}' not found."
         )
 
-    reviewer_id = uuid.UUID(str(current_user.get("id")))
+    reviewer_id = str(current_user.get("id"))
     now = datetime.now(timezone.utc)
 
     record.status = payload.status.value
@@ -461,11 +414,11 @@ def list_checkins(
     query = db.query(AttendanceRecord).join(AttendanceRecord.session).join(AttendanceRecord.student)
 
     if session_id:
-        query = query.filter(AttendanceRecord.session_id == session_id)
+        query = query.filter(AttendanceRecord.session_id == str(session_id))
     if course_id:
-        query = query.filter(SessionModel.course_id == course_id)
+        query = query.filter(SessionModel.course_id == str(course_id))
     if student_id:
-        query = query.filter(AttendanceRecord.student_id == student_id)
+        query = query.filter(AttendanceRecord.student_id == str(student_id))
     if status_filter:
         query = query.filter(AttendanceRecord.status == status_filter.value)
     if min_risk_score is not None:
@@ -534,15 +487,14 @@ async def create_checkin(
             detail="Session is not currently active."
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     checkin_opens_at = session_obj.checkin_opens_at
     checkin_closes_at = session_obj.checkin_closes_at
-    if checkin_opens_at.tzinfo is None:
-        checkin_opens_at = checkin_opens_at.replace(tzinfo=timezone.utc)
-    if checkin_closes_at.tzinfo is None:
-        checkin_closes_at = checkin_closes_at.replace(tzinfo=timezone.utc)
-
+    if checkin_opens_at.tzinfo is not None:
+        checkin_opens_at = checkin_opens_at.replace(tzinfo=None)
+    if checkin_closes_at.tzinfo is not None:
+        checkin_closes_at = checkin_closes_at.replace(tzinfo=None)
     if now < checkin_opens_at or now > checkin_closes_at:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -570,8 +522,8 @@ async def create_checkin(
                 detail="Invalid QR code provided for this session."
             )
         qr_expires_at = session_obj.qr_code_expires_at
-        if qr_expires_at and qr_expires_at.tzinfo is None:
-            qr_expires_at = qr_expires_at.replace(tzinfo=timezone.utc)
+        if qr_expires_at and qr_expires_at.tzinfo is not None:
+            qr_expires_at = qr_expires_at.replace(tzinfo=None)
         if qr_expires_at and now > qr_expires_at:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -746,10 +698,7 @@ async def create_checkin(
 
     total_risk = round(min(max(local_risk, module3_risk), 1.0), 4)
 
-    if (
-        (session_obj.require_liveness_check and liveness_passed is False)
-        or geofence_exceeded_critical
-    ):
+    if geofence_exceeded_critical:
         checkin_status = CheckinStatus.rejected
     else:
         threshold = session_obj.risk_threshold or 0.50

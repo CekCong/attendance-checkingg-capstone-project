@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, func, create_engine
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, Session, relationship, sessionmaker
-from security import get_current_user
+from ..security import get_current_user
+from ..database import get_db as shared_get_db
 import os
 from dotenv import load_dotenv
 
@@ -28,14 +29,10 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    yield from shared_get_db()
 
 
-from models import UserModel as User, CourseModel as Course, EnrollmentModel as Enrollment
+from ..models import UserModel as User, CourseModel as Course, EnrollmentModel as Enrollment
 
 
 # Pydantic Schemas
@@ -118,8 +115,10 @@ def create_enrollment(
             detail="Access denied. Instructor or Admin permissions required."
         )
 
-    student = db.query(User).filter(User.id == payload.student_id).first()
-    course = db.query(Course).filter(Course.id == payload.course_id).first()
+    student_id = str(payload.student_id)
+    course_id = str(payload.course_id)
+    student = db.query(User).filter(User.id == student_id).first()
+    course = db.query(Course).filter(Course.id == course_id).first()
 
     if not student or not course:
         raise HTTPException(
@@ -130,8 +129,8 @@ def create_enrollment(
     existing_enrollment = (
         db.query(Enrollment)
         .filter(
-            Enrollment.student_id == payload.student_id,
-            Enrollment.course_id == payload.course_id
+            Enrollment.student_id == student_id,
+            Enrollment.course_id == course_id
         )
         .first()
     )
@@ -144,8 +143,8 @@ def create_enrollment(
     # id is a String(36) primary key without a default generator; we must explicitly generate a UUID string.
     new_enrollment = Enrollment(
         id=str(uuid.uuid4()),
-        student_id=payload.student_id,
-        course_id=payload.course_id,
+        student_id=student_id,
+        course_id=course_id,
         is_active=True
     )
     db.add(new_enrollment)
@@ -181,7 +180,8 @@ def bulk_enroll_students(
         )
 
     # Verify Course Exists
-    course = db.query(Course).filter(Course.id == payload.course_id).first()
+    course_id = str(payload.course_id)
+    course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -224,8 +224,8 @@ def bulk_enroll_students(
         existing_enrollment = (
             db.query(Enrollment)
             .filter(
-                Enrollment.student_id == student.id,
-                Enrollment.course_id == payload.course_id
+                Enrollment.student_id == str(student.id),
+                Enrollment.course_id == course_id
             )
             .first()
         )
@@ -244,7 +244,7 @@ def bulk_enroll_students(
             new_enrollment = Enrollment(
                 id=str(uuid.uuid4()),
                 student_id=student.id,
-                course_id=payload.course_id,
+                course_id=course_id,
                 is_active=True
             )
             db.add(new_enrollment)

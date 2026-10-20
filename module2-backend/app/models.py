@@ -1,4 +1,5 @@
 from sqlalchemy import Column, String, Boolean, Integer, Float, Text, DateTime, Enum, ForeignKey, Index, UniqueConstraint
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
 
@@ -101,6 +102,8 @@ class SessionModel(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
+    course = relationship("CourseModel")
+
 class DeviceModel(Base):
     __tablename__ = "devices"
 
@@ -169,6 +172,10 @@ class CheckinModel(Base):
     appeal_reason = Column(Text, nullable=True)
     appealed_at = Column(DateTime, nullable=True)
     scheduled_deletion_at = Column(DateTime, nullable=True)
+
+    session = relationship("SessionModel")
+    student = relationship("UserModel", foreign_keys=[student_id])
+    reviewer = relationship("UserModel", foreign_keys=[reviewed_by_id])
 
 
 class RiskSignalModel(Base):

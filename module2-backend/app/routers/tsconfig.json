@@ -1,9 +1,6 @@
 {
   "compilerOptions": {
-<<<<<<< Updated upstream
-=======
     "target": "es5",
->>>>>>> Stashed changes
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
@@ -16,15 +13,11 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "incremental": true,
-<<<<<<< Updated upstream
     "plugins": [
       {
         "name": "next"
       }
     ],
-=======
-    "plugins": [{ "name": "next" }],
->>>>>>> Stashed changes
     "paths": {
       "@/*": ["./*"]
     }

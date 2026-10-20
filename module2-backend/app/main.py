@@ -82,11 +82,10 @@ Health
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import auth, checkins, observability, rbac_stubs, users
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from .routers import admin, auth, checkins, courses, devices, enrollment, observability, rbac_stubs, sessions, users
 from .database import engine, Base
-from . import models  # Import models so metadata registers them
+from . import models
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -112,8 +111,13 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/api/v1")
-app.include_router(users.router, prefix="/api/v1")
+app.include_router(courses.router, prefix="/api/v1")
+app.include_router(sessions.router, prefix="/api/v1")
+app.include_router(devices.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
+app.include_router(enrollment.router, prefix="/api/v1")
 app.include_router(checkins.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
 app.include_router(observability.router, prefix="/api/v1")
 app.include_router(rbac_stubs.router, prefix="/api/v1")
 
