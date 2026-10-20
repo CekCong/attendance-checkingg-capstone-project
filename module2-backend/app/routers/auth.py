@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import html
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
@@ -54,9 +55,14 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 class RegisterBody(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8)
     full_name: str = Field(min_length=1)
     role: Role = "student"
+
+    @field_validator("full_name")
+    @classmethod
+    def escape_full_name(cls, value: str) -> str:
+        return html.escape(value, quote=False)
 
 class LoginBody(BaseModel):
     email: EmailStr
@@ -93,12 +99,6 @@ async def register(body: RegisterBody, request: Request, db: Session = Depends(g
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many registration attempts. Please try again later.",
             headers={"X-RateLimit-Remaining": "0"},
-        )
-
-    if len(body.password) < 8:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="password too weak",
         )
 
     existing_user = db.query(UserModel).filter(UserModel.email == body.email.lower().strip()).first()
