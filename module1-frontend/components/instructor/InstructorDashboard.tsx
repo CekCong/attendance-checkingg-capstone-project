@@ -110,6 +110,33 @@ export function InstructorDashboard() {
     });
   }, [data, auditSearch, auditAction, auditResult]);
 
+  const attendanceAnalytics = useMemo(() => {
+    if (!data) {
+      return {
+        approved: 0,
+        flagged: 0,
+        rejected: 0,
+        total: 0,
+      };
+    }
+
+    const approved = data.records.filter(
+      (record) => record.status === "approved").length;
+
+    const flagged = data.records.filter(
+      (record) => record.status === "flagged").length;
+
+    const rejected = data.records.filter(
+      (record) => record.status === "rejected").length;
+
+    return {
+      approved,
+      flagged,
+      rejected,
+      total: data.records.length
+    };
+  }, [data]);
+
   function exportRecords(format: "csv" | "json") {
     const stamp = new Date().toISOString().slice(0, 10);
     if (format === "csv") {
@@ -134,6 +161,10 @@ export function InstructorDashboard() {
         (item) => item.id === checkinId,
       );
 
+      const reviewedRecord = current.records.find(
+        (record) => record.checkinId === checkinId,
+      );
+
       const updatedRecords = current.records.map((record) =>
         record.checkinId === checkinId
           ? { ...record, status: decision }
@@ -142,6 +173,15 @@ export function InstructorDashboard() {
 
       const updatedFlagged = current.flagged.filter(
         (item) => item.id !== checkinId,
+      );
+
+      const updatedSessions = current.todaySessions.map((session) =>
+        session.id === reviewedRecord?.sessionId
+          ? {
+              ...session,
+              flagged: Math.max(0, session.flagged - 1),
+            }
+          : session,
       );
 
       const approvedCount = updatedRecords.filter(
@@ -167,6 +207,7 @@ export function InstructorDashboard() {
 
         flagged: updatedFlagged,
         records: updatedRecords,
+        todaySessions: updatedSessions,
 
         auditLogs: [
           newAuditLog,
@@ -361,7 +402,128 @@ export function InstructorDashboard() {
         <Kpi label="Approval rate" value={data ? `${Math.round(data.kpis.approvalRate * 100)}%` : "—"} />
         <Kpi label="Live sessions" value={String(data?.kpis.liveSessions ?? "—")} />
       </div>
+      <GlassCard className="p-5 sm:p-6">
+        <div className="mb-5">
+          <h2 className="font-display text-xl font-semibold text-white">
+            Attendance analytics
+          </h2>
 
+          <p className="mt-1 text-sm text-white/70">
+            Live breakdown of today&apos;s attendance records.
+          </p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+
+          <div className="rounded-2xl bg-white/10 p-4">
+            <p className="text-sm text-white/60">Approved</p>
+
+            <p className="mt-2 text-3xl font-semibold text-emerald-200">
+              {attendanceAnalytics.approved}
+            </p>
+
+            <p className="mt-1 text-xs text-white/50">
+              {attendanceAnalytics.total > 0
+                ? Math.round(
+                    (attendanceAnalytics.approved /
+                      attendanceAnalytics.total) *
+                      100,
+                  )
+                : 0}
+              % of records
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-white/10 p-4">
+            <p className="text-sm text-white/60">Flagged</p>
+
+            <p className="mt-2 text-3xl font-semibold text-amber-200">
+              {attendanceAnalytics.flagged}
+            </p>
+
+            <p className="mt-1 text-xs text-white/50">
+              Requires instructor review
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-white/10 p-4">
+            <p className="text-sm text-white/60">Rejected</p>
+
+            <p className="mt-2 text-3xl font-semibold text-rose-200">
+              {attendanceAnalytics.rejected}
+            </p>
+
+            <p className="mt-1 text-xs text-white/50">
+              Rejected attendance attempts
+            </p>
+          </div>
+        </div>
+      </GlassCard>
+      <GlassCard className="p-5 sm:p-6">
+        <div className="mb-5">
+          <h2 className="font-display text-xl font-semibold text-white">
+            Session attendance progress
+          </h2>
+
+          <p className="mt-1 text-sm text-white/70">
+            Check-in progress for today&apos;s sessions.
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          {(data?.todaySessions ?? []).map((session) => {
+            const percentage =
+              session.enrolled > 0
+                ? Math.min(
+                    100,
+                    Math.round(
+                      (session.checkins / session.enrolled) * 100,
+                    ),
+                  )
+                : 0;
+
+            return (
+              <div
+                key={session.id}
+                className="rounded-2xl bg-white/10 p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-white">
+                      {session.title}
+                    </p>
+
+                    <p className="text-xs text-white/60">
+                      {session.courseCode}
+                    </p>
+                  </div>
+
+                  <p className="text-sm font-semibold text-white">
+                    {percentage}%
+                  </p>
+                </div>
+
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/15">
+                  <div
+                    className="h-full rounded-full bg-emerald-300"
+                    style={{ width: `${percentage}%` }}
+                  />
+                </div>
+
+                <div className="mt-2 flex justify-between text-xs text-white/60">
+                  <span>
+                    {session.checkins}/{session.enrolled} checked in
+                  </span>
+
+                  <span>
+                    {session.flagged} flagged
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </GlassCard>
       <details className="group">
         <summary className="cursor-pointer list-none">
           <GlassCard className="p-5">
