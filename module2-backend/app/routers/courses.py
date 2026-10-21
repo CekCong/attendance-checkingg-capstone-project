@@ -7,7 +7,7 @@ from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, ForeignKe
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 import os
 from dotenv import load_dotenv
-from models import CourseModel as Course, UserModel as User, SessionModel
+from ..models import CourseModel as Course, UserModel as User, SessionModel
 
 from app.security import get_current_user, require_roles
 
@@ -37,7 +37,7 @@ class CourseCreate(BaseModel):
     name: str
     description: Optional[str] = None
     semester: str
-    instructor_id: str
+    instructor_id: Optional[str] = None
     venue_name: Optional[str] = None
     venue_latitude: Optional[float] = None
     venue_longitude: Optional[float] = None
@@ -51,8 +51,8 @@ class CourseListItemResponse(BaseModel):
     code: str
     name: str
     semester: str
-    instructor_id: str
-    instructor_name: str
+    instructor_id: Optional[str] = None
+    instructor_name: Optional[str] = None
     venue_name: Optional[str] = None
     venue_latitude: Optional[float] = None
     venue_longitude: Optional[float] = None
@@ -76,7 +76,7 @@ class CourseResponse(BaseModel):
     name: str
     description: Optional[str] = None
     semester: str
-    instructor_id: str
+    instructor_id: Optional[str] = None
     is_active: bool
     venue_name: Optional[str] = None
     venue_latitude: Optional[float] = None
@@ -154,7 +154,7 @@ def list_courses(
         )
 
     total = query.count()
-    courses = query.offset(offset).limit(limit).all()
+    courses = query.order_by(Course.created_at.desc()).offset(offset).limit(limit).all()
 
     items = []
     for course in courses:
@@ -183,7 +183,8 @@ def list_courses(
                 geofence_radius_meters=course.geofence_radius_meters,
                 risk_threshold=course.risk_threshold,
                 is_active=course.is_active,
-                created_at=course.created_at
+                created_at=course.created_at,
+                updated_at=course.updated_at,
             )
         )
 
@@ -301,7 +302,8 @@ def get_course_details(
         geofence_radius_meters=course.geofence_radius_meters,
         risk_threshold=course.risk_threshold,
         is_active=course.is_active,
-        created_at=course.created_at
+        created_at=course.created_at,
+        updated_at=course.updated_at,
     )
 
 

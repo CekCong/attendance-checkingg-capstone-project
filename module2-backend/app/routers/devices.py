@@ -3,14 +3,14 @@ from datetime import datetime
 from typing import Optional, Any, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, String, Text, Boolean, Integer, DateTime, ForeignKey, func, create_engine
-from sqlalchemy.orm import Session, sessionmaker, declarative_base
-from auth import get_current_user  # Adjust based on your auth implementation
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from sqlalchemy.orm import declarative_base, sessionmaker
 import os
 from dotenv import load_dotenv
-from models import DeviceModel
-
-from security import get_current_user
+from ..database import get_db as shared_get_db
+from ..models import DeviceModel
+from ..security import get_current_user
 
 load_dotenv()
 
@@ -25,11 +25,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    yield from shared_get_db()
 
 router = APIRouter(prefix="/devices", tags=["Devices"])
 
@@ -38,7 +34,8 @@ class DeviceRegisterRequest(BaseModel):
     device_fingerprint: str = Field(..., max_length=64, description="Unique device hash")
     device_name: Optional[str] = Field(None, max_length=255, description="Friendly name")
     platform: Optional[str] = Field(None, description="Platform type (ios|android|web|desktop)")
-    public_key: str = Field(..., description="PEM encoded public key")
+    browser: Optional[str] = Field(None, max_length=100)
+    public_key: Optional[str] = Field(None, description="PEM encoded public key")
 
 class DeviceUpdateRequest(BaseModel):
     device_name: Optional[str] = Field(None, max_length=255)
@@ -75,6 +72,7 @@ def get_user_id_and_role(current_user: Any):
 
 # --- Endpoints ---
 
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=DeviceResponse)
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=DeviceResponse)
 def register_device(
     payload: DeviceRegisterRequest,
@@ -97,7 +95,8 @@ def register_device(
         device_fingerprint=payload.device_fingerprint,
         device_name=payload.device_name,
         platform=payload.platform,
-        public_key=payload.public_key,
+        browser=payload.browser,
+        public_key=payload.public_key or "",
         is_trusted=False,
         trust_score="low",
         is_active=True,

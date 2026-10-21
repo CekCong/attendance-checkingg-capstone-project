@@ -108,6 +108,26 @@ pip install --upgrade pip
 pip install -r requirements-test.txt
 ```
 
+On Windows, run these commands in PowerShell instead (use Python 3.11):
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python --version
+python -m pip install --upgrade pip
+python -m pip install -r requirements-test.txt
+```
+
+If PowerShell reports that script execution is disabled when activating the
+environment, use the environment's Python directly instead:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-test.txt
+```
+
+The backend allows up to 100,000 registration and login attempts per IP per
+hour so repeated test runs are not blocked by rate limiting.
+
 ### Step 2: Start Your Services
 
 ```bash
@@ -145,6 +165,15 @@ python3 -m pytest tests/public/test_integration.py -v
 # LETTER GRADE: A
 ```
 
+In PowerShell, set the optional test URLs this way:
+
+```powershell
+$env:TEST_BACKEND_URL = "http://localhost:8000"
+$env:TEST_FACE_URL = "http://localhost:8001"
+
+python -m pytest tests/public/ -v
+```
+
 ### Step 4: Stop Services
 
 ```bash
@@ -167,6 +196,13 @@ docker-compose ps  # Verify all services are "Up"
 ```bash
 export TEST_BACKEND_URL=http://localhost:8000
 curl $TEST_BACKEND_URL/health
+```
+
+In PowerShell:
+
+```powershell
+$env:TEST_BACKEND_URL = "http://localhost:8000"
+curl.exe "$env:TEST_BACKEND_URL/health"
 ```
 
 ### Note on System Dependencies
@@ -309,4 +345,3 @@ Avoid these mistakes:
 - Incorrect CORS configuration (frontend can't communicate)
 
 ---
-

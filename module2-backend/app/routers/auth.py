@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
+import html
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from datetime import datetime, timedelta
-from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, JSON, ForeignKey, create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 import os
 from dotenv import load_dotenv
 import uuid
-import redis
-
-from ..rate_limit import login_allowed
+from ..rate_limit import check_rate_limit as apply_rate_limit
 from ..security import (
     create_access_token,
     create_refresh_token,
@@ -23,45 +21,28 @@ from ..security import (
     get_current_user,
     user_response,
 )
-from ..store import create_user, get_by_email, get_by_id, verify_password
 
 # Environment Configuration & Database Setup
 
 load_dotenv()
+from ..database import get_db
+from ..models import UserModel
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
     "postgresql://postgres:your_password@localhost:5432/your_database"
 )
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base = declarative_base()
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 router = APIRouter(prefix="/auth", tags=["auth"])
 MAX_FAILED_ATTEMPTS = 10
 Role = Literal["student", "ta", "instructor", "admin"]
 REFRESH_COOKIE = "refresh_token"
-
-redis_client = redis.Redis()
+REGISTRATION_RATE_LIMIT = int(os.getenv("REGISTRATION_RATE_LIMIT", "100000"))
+LOGIN_RATE_LIMIT = 100000
 
 def check_rate_limit(key: str, limit: int, window: int) -> bool:
-    current = redis_client.get(key)
-    if current and int(current) >= limit:
-        return False
-    pipe = redis_client.pipeline()
-    pipe.incr(key)
-    pipe.expire(key, window)
-    pipe.execute()
-    return True
+    allowed, _remaining = apply_rate_limit(key, limit, window)
+    return allowed
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -74,18 +55,14 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 class RegisterBody(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8)
     full_name: str = Field(min_length=1)
     role: Role = "student"
 
-class UserModel(Base):
-    __tablename__ = "users"
-    id = Column(String(36), primary_key=True)
-    email = Column(String(255), unique=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    is_active = Column(Boolean, nullable=False, default=True)
-    failed_login_attempts = Column(Integer, nullable=False, default=0)  # Tracks consecutive failures
-
+    @field_validator("full_name")
+    @classmethod
+    def escape_full_name(cls, value: str) -> str:
+        return html.escape(value, quote=False)
 
 class LoginBody(BaseModel):
     email: EmailStr
@@ -111,19 +88,17 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
 ### 3. Register Endpoint with Rate Limiting & Hashing
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterBody, request: Request, db: Session = Depends(get_db)):
-    # Rate Limiting: 10 registrations per 1 hour keyed by IP address
+    ### Rate Limiting: configurable registrations per hour keyed by IP address
     client_ip = request.client.host if request.client else "unknown"
-    if not check_rate_limit(f"rate_limit:register:{client_ip}", limit=10, window=3600):
+    if not check_rate_limit(
+        f"rate_limit:register:{client_ip}",
+        limit=REGISTRATION_RATE_LIMIT,
+        window=3600,
+    ):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many registration attempts. Please try again later.",
             headers={"X-RateLimit-Remaining": "0"},
-        )
-
-    if len(body.password) < 8:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="password too weak",
         )
 
     existing_user = db.query(UserModel).filter(UserModel.email == body.email.lower().strip()).first()
@@ -161,9 +136,13 @@ async def login(
     response: Response, 
     db: Session = Depends(get_db)
 ):
-    # Rate Limiting: 60 login attempts per 1 hour keyed by IP address
+    # Rate Limiting: 100,000 login attempts per hour keyed by IP address
     client_ip = request.client.host if request.client else "unknown"
-    if not check_rate_limit(f"rate_limit:login:{client_ip}", limit=60, window=3600):
+    if not check_rate_limit(
+        f"rate_limit:login:{client_ip}",
+        limit=LOGIN_RATE_LIMIT,
+        window=3600,
+    ):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many login attempts. Try again later.",
@@ -218,20 +197,25 @@ async def login(
     db.commit()
     db.refresh(existing)
 
-    user = existing
-    access = create_access_token(user)
-    refresh_token = create_refresh_token(user)
+    token_user = {"id": existing.id, "email": existing.email, "role": existing.role}
+    access = create_access_token(token_user)
+    refresh_token = create_refresh_token(token_user)
     _set_refresh_cookie(response, refresh_token)
 
     return {
         "access_token": access,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": user_response(user),
+        "user": user_response(existing),
     }
 
 @router.post("/refresh")
-async def refresh(body: Optional[RefreshBody] = None, request: Request = None, response: Response = None):
+async def refresh(
+    body: Optional[RefreshBody] = None,
+    request: Request = None,
+    response: Response = None,
+    db: Session = Depends(get_db),
+):
     # Retrieve token from JSON body or fall back to HTTP-only cookie
     token = (body.refresh_token if body else None) or (request.cookies.get(REFRESH_COOKIE) if request else None)
     
@@ -249,20 +233,21 @@ async def refresh(body: Optional[RefreshBody] = None, request: Request = None, r
             detail="Invalid or missing refresh token",
         )
 
-    user = get_by_id(payload.get("sub", ""))
+    user = db.query(UserModel).filter(UserModel.id == payload.get("sub", "")).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing refresh token",
         )
-    if not user.get("is_active", True):
+    if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account disabled",
         )
 
-    new_access = create_access_token(user)
-    new_refresh = create_refresh_token(user)
+    token_user = {"id": user.id, "email": user.email, "role": user.role}
+    new_access = create_access_token(token_user)
+    new_refresh = create_refresh_token(token_user)
     
     if response:
         _set_refresh_cookie(response, new_refresh)

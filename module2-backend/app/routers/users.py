@@ -1,8 +1,9 @@
 import uuid
+import html
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 import enum
@@ -25,6 +26,11 @@ class UpdateMeBody(BaseModel):
     full_name: Optional[str] = Field(None, max_length=255)
     camera_consent: Optional[bool] = None
     geolocation_consent: Optional[bool] = None
+
+    @field_validator("full_name")
+    @classmethod
+    def escape_full_name(cls, value: Optional[str]) -> Optional[str]:
+        return html.escape(value, quote=False) if value is not None else None
 
 class AdminUpdateUserBody(BaseModel):
     role: Optional[UserRole] = None

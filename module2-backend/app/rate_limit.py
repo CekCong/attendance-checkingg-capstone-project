@@ -6,7 +6,7 @@ import os
 import time
 from typing import Tuple
 
-LOGIN_LIMIT = 60
+LOGIN_LIMIT = 100000
 LOGIN_WINDOW_SECONDS = 3600
 
 _memory_hits: dict[str, list[float]] = {}
@@ -22,14 +22,23 @@ def _get_redis():
     try:
         import redis as redis_lib
 
-        client = redis_lib.Redis(
-            host=os.getenv("REDIS_HOST", "localhost"),
-            port=int(os.getenv("REDIS_PORT", "6380")),
-            db=int(os.getenv("REDIS_DB", "0")),
-            decode_responses=True,
-            socket_connect_timeout=0.15,
-            socket_timeout=0.15,
-        )
+        redis_url = os.getenv("REDIS_URL")
+        if redis_url:
+            client = redis_lib.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=0.15,
+                socket_timeout=0.15,
+            )
+        else:
+            client = redis_lib.Redis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", "6380")),
+                db=int(os.getenv("REDIS_DB", "0")),
+                decode_responses=True,
+                socket_connect_timeout=0.15,
+                socket_timeout=0.15,
+            )
         client.ping()
         _redis = client
     except Exception:

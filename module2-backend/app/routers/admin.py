@@ -2,14 +2,16 @@ import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum, ForeignKey, create_engine, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 import enum
 import os
 from dotenv import load_dotenv
 
-from security import get_current_user
+from app.security import get_current_user
+from app.database import get_db as shared_get_db
+from app.models import UserModel as User, SessionModel, EnrollmentModel
 
 # --- Database Setup ---
 load_dotenv()
@@ -25,11 +27,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    yield from shared_get_db()
 
 # --- Enums & SQLAlchemy Models ---
 class UserRole(str, enum.Enum):
@@ -43,8 +41,6 @@ class SessionStatus(str, enum.Enum):
     active = "active"
     closed = "closed"
     cancelled = "cancelled"
-
-from models import UserModel as User, SessionModel
 
 class CourseEnrollment(Base):
     __tablename__ = "course_enrollments"
@@ -78,8 +74,10 @@ class SessionStatusUpdate(BaseModel):
     status: SessionStatus
 
 class EnrollmentCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     course_id: str
-    user_id: str
+    user_id: str = Field(alias="student_id")
     role: Optional[str] = "student"
 
 class EnrollmentResponse(BaseModel):
@@ -216,18 +214,24 @@ def create_enrollment(
     _: Dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
-    enrollment = CourseEnrollment(
+    enrollment = EnrollmentModel(
         id=str(uuid.uuid4()),
         course_id=payload.course_id,
-        user_id=payload.user_id,
-        role=payload.role
+        student_id=payload.user_id,
+        is_active=True,
     )
 
     try:
         db.add(enrollment)
         db.commit()
         db.refresh(enrollment)
-        return enrollment
+        return {
+            "id": enrollment.id,
+            "course_id": enrollment.course_id,
+            "user_id": enrollment.student_id,
+            "role": "student",
+            "created_at": enrollment.enrolled_at,
+        }
     except Exception as e:
         db.rollback()
         raise HTTPException(

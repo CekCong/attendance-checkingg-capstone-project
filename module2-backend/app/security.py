@@ -116,7 +116,25 @@ def has_at_least(user: Dict[str, Any], role: str) -> bool:
     return ROLE_LEVEL.get(user.get("role", ""), 0) >= ROLE_LEVEL.get(role, 99)
 
 
-def user_response(user: Dict[str, Any]) -> Dict[str, Any]:
+def user_response(user: Any) -> Dict[str, Any]:
+    if not isinstance(user, dict):
+        user = {
+            field: getattr(user, field)
+            for field in (
+                "id",
+                "email",
+                "full_name",
+                "role",
+                "is_active",
+                "camera_consent",
+                "geolocation_consent",
+                "face_enrolled",
+                "created_at",
+                "hashed_password",
+            )
+            if hasattr(user, field)
+        }
+
     if "password_hash" in user or "created_at" in user:
         try:
             return public_user(user)
