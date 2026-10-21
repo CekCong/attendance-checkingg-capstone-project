@@ -107,7 +107,7 @@ async def assess_risk(
     user_agent: Optional[str],
     latitude: float,
     longitude: float,
-    accuracy: float,
+    accuracy: Optional[float],
 ) -> Dict[str, Any]:
     return await _post(
         "/risk/assess",
@@ -120,7 +120,7 @@ async def assess_risk(
             "geolocation": {
                 "latitude": latitude,
                 "longitude": longitude,
-                "accuracy": accuracy,
+                "accuracy": accuracy if accuracy is not None else 5000.0,
             },
         },
         timeout=5.0,

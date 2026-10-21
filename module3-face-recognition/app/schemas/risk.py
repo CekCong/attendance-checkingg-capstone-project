@@ -8,9 +8,9 @@ from pydantic import BaseModel, Field, IPvAnyAddress
 
 class GeolocationData(BaseModel):
     """Geolocation data for risk assessment."""
-    latitude: float = Field(ge=-90, le=90)
-    longitude: float = Field(ge=-180, le=180)
-    accuracy: float = Field(ge=0, le=5000)
+    latitude: float
+    longitude: float
+    accuracy: float
 
 
 class RiskAssessRequest(BaseModel):

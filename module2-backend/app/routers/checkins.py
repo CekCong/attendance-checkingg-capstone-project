@@ -150,6 +150,10 @@ class FlaggedCheckinItem(BaseModel):
     def parse_risk_factors(cls, value):
         return json.loads(value) if isinstance(value, str) else value or []
 
+class FlaggedCheckinPaginatedResponse(BaseModel):
+    items: List[FlaggedCheckinItem]
+    total: int
+
 class AppealCreate(BaseModel):
     appeal_reason: str
 
@@ -178,7 +182,7 @@ class ReviewResponse(BaseModel):
 router = APIRouter(prefix="/checkins", tags=["Check-ins"])
 
 # GET /checkins/flagged - Get check-ins requiring review (flagged or appealed)
-@router.get("/flagged", response_model=List[FlaggedCheckinItem], status_code=status.HTTP_200_OK)
+@router.get("/flagged", response_model=FlaggedCheckinPaginatedResponse, status_code=status.HTTP_200_OK)
 def get_flagged_checkins(
     course_id: Optional[uuid.UUID] = Query(None, description="Filter by course"),
     session_id: Optional[uuid.UUID] = Query(None, description="Filter by session"),
@@ -204,24 +208,28 @@ def get_flagged_checkins(
     if session_id:
         query = query.filter(AttendanceRecord.session_id == str(session_id))
 
+    total = query.count()
     records = query.order_by(AttendanceRecord.checked_in_at.desc()).limit(limit).all()
 
-    return [
-        FlaggedCheckinItem(
-            id=rec.id,
-            session_id=rec.session_id,
-            session_name=rec.session.name if rec.session else "",
-            student_id=rec.student_id,
-            student_name=rec.student.full_name if rec.student else "",
-            status=CheckinStatus(rec.status),
-            checked_in_at=rec.checked_in_at,
-            risk_score=rec.risk_score,
-            risk_factors=json.loads(rec.risk_factors) if rec.risk_factors else [],
-            appeal_reason=rec.appeal_reason,
-            appealed_at=rec.appealed_at
-        )
-        for rec in records
-    ]
+    return {
+        "items": [
+            FlaggedCheckinItem(
+                id=rec.id,
+                session_id=rec.session_id,
+                session_name=rec.session.name if rec.session else "",
+                student_id=rec.student_id,
+                student_name=rec.student.full_name if rec.student else "",
+                status=CheckinStatus(rec.status),
+                checked_in_at=rec.checked_in_at,
+                risk_score=rec.risk_score,
+                risk_factors=json.loads(rec.risk_factors) if rec.risk_factors else [],
+                appeal_reason=rec.appeal_reason,
+                appealed_at=rec.appealed_at
+            )
+            for rec in records
+        ],
+        "total": total,
+    }
 
 # GET /checkins/my-checkins - Get current student's check-in history
 @router.get("/my-checkins", response_model=List[MyCheckinItem], status_code=status.HTTP_200_OK)
