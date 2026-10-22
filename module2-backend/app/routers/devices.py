@@ -10,7 +10,7 @@ import os
 from dotenv import load_dotenv
 from ..database import get_db as shared_get_db
 from ..models import DeviceModel
-from ..security import get_current_user
+from ..security import get_current_user, require_roles
 
 load_dotenv()
 
@@ -71,6 +71,15 @@ def get_user_id_and_role(current_user: Any):
 
 
 # --- Endpoints ---
+
+@router.get("/", status_code=status.HTTP_200_OK)
+def list_all_devices(
+    _current_user: Any = Depends(require_roles("admin")),
+    db: Session = Depends(get_db)
+):
+    """List all registered devices. Requires admin role."""
+    devices = db.query(DeviceModel).all()
+    return {"items": devices, "total": len(devices)}
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=DeviceResponse)
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=DeviceResponse)

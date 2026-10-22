@@ -19,7 +19,11 @@ def calculate_risk_score(request):
         request.device_public_key,
         request.device_challenge,
     )
-    network_risk_score = network_risk(request.ip_address, request.user_agent)
+    country_risk_score = ip_country_risk(request.ip_address)
+    network_risk_score = max(
+        network_risk(request.ip_address, request.user_agent),
+        country_risk_score,
+    )
 
     if request.geolocation is None:
         geolocation_risk_score = 1.0
@@ -35,6 +39,7 @@ def calculate_risk_score(request):
         "face_match": round(face_match_risk_score, 4),
         "device": round(device_risk_score, 4),
         "network": round(network_risk_score, 4),
+        "ip_country": round(country_risk_score, 4),
         "geolocation": round(geolocation_risk_score, 4),
     }
     risk_score = round(
@@ -172,6 +177,20 @@ def is_proxy_ip(ip_address):
 def is_tor_exit_node(ip_address):
     data = get_ip_info(ip_address)
     return bool(data.get("privacy", {}).get("tor", False))
+
+
+def ip_country_risk(ip_address):
+    """Return high risk for a public IP geolocated outside Singapore."""
+    try:
+        ip = ipaddress.ip_address(ip_address)
+    except (ValueError, TypeError):
+        return 1.0
+
+    if ip.is_private or ip.is_loopback:
+        return 0.0
+
+    country = get_ip_info(str(ip)).get("country")
+    return 1.0 if country and country.upper() != "SG" else 0.0
 
 
 def network_risk(ip_address, user_agent):

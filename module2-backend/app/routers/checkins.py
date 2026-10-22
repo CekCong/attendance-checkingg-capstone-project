@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from sqlalchemy.orm import Session
 from ..security import get_current_user
+from ..rate_limit import client_ip
 from ..database import get_db as shared_get_db
 from ..models import CheckinModel, DeviceModel, SessionModel, UserModel as User
 from ..services.face_client import (
@@ -509,6 +510,12 @@ async def create_checkin(
             detail="Check-in window is closed for this session."
         )
 
+    if not (1.15 <= payload.latitude <= 1.4833 and 103.60 <= payload.longitude <= 104.4167):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Check-ins are only allowed within Singapore."
+        )
+
     existing_checkin = (
         db.query(CheckinModel)
         .filter(
@@ -542,6 +549,7 @@ async def create_checkin(
     local_risk = 0.0
     distance_meters = None
     geofence_exceeded_critical = False
+    outside_singapore_ip = False
 
     if session_obj.venue_latitude is not None and session_obj.venue_longitude is not None:
         distance_meters = calculate_haversine_distance(
@@ -663,14 +671,16 @@ async def create_checkin(
                     else (0.0 if session_obj.require_face_match else 1.0)
                 ),
                 device_public_key=device.public_key if device else None,
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_ip(request),
                 user_agent=request.headers.get("user-agent"),
                 latitude=payload.latitude,
                 longitude=payload.longitude,
                 accuracy=payload.location_accuracy_meters,
             )
             module3_risk = float(risk_result["risk_score"])
-            for signal_name, signal_risk in risk_result.get("signal_breakdown", {}).items():
+            signal_breakdown = risk_result.get("signal_breakdown", {})
+            outside_singapore_ip = float(signal_breakdown.get("ip_country", 0.0)) >= 1.0
+            for signal_name, signal_risk in signal_breakdown.items():
                 signal_risk = float(signal_risk)
                 if signal_risk <= 0:
                     continue
@@ -706,7 +716,7 @@ async def create_checkin(
 
     total_risk = round(min(max(local_risk, module3_risk), 1.0), 4)
 
-    if geofence_exceeded_critical:
+    if geofence_exceeded_critical or outside_singapore_ip:
         checkin_status = CheckinStatus.rejected
     else:
         threshold = session_obj.risk_threshold or 0.50
