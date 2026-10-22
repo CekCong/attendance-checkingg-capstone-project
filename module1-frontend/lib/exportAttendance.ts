@@ -17,7 +17,8 @@ const CSV_COLUMNS = [
   "longitude",
 ] as const;
 
-function csvEscape(value: string | number): string {
+function csvEscape(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return "";
   const text = String(value);
   if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
   return text;

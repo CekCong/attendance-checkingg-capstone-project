@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { signAccessToken, signRefreshToken, stubUser } from "@/lib/jwt";
 import { isInstructorApp } from "@/lib/appSurface";
 
 const REFRESH_COOKIE = "refresh_token";
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
@@ -14,23 +15,63 @@ export async function POST(request: Request) {
     return NextResponse.json({ detail: "Username and password are required" }, { status: 400 });
   }
 
-  const user = stubUser(body.email, isInstructorApp() ? "instructor" : "student");
-  const access_token = await signAccessToken(user);
-  const refresh_token = await signRefreshToken(user);
+  const backendResponse = await fetch(
+    `${BACKEND_URL}/api/v1/auth/login`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: body.email.trim(),
+        password: body.password,
+      }),
+    }
+  );
+
+  const data = await backendResponse.json().catch(() => ({}));
+
+  if (!backendResponse.ok) {
+    return NextResponse.json(
+      {
+        detail: data.detail ?? "Login failed",
+      },
+      {
+        status: backendResponse.status,
+      },
+    );
+  }
+
+  if (
+    isInstructorApp() &&
+    data.user?.role !== "instructor" &&
+    data.user?.role !== "admin"
+  ) {
+    return NextResponse.json(
+      { detail: "Instructor access required" },
+      { status: 403 },
+    );
+  }
 
   const response = NextResponse.json({
-    access_token,
-    token_type: "bearer",
-    user,
+    access_token: data.access_token,
+    token_type: data.token_type ?? "bearer",
+    user: data.user,
   });
 
-  response.cookies.set(REFRESH_COOKIE, refresh_token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 7,
-  });
+  if (data.refresh_token) {
+    response.cookies.set(
+      REFRESH_COOKIE,
+      data.refresh_token,
+      {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 7,
+      },
+    );
+  }
 
   return response;
 }

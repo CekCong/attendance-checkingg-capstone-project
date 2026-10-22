@@ -33,10 +33,10 @@ export type AttendanceRecord = {
   status: CheckinStatus;
   checkedInAt: string;
   riskScore: number;
-  livenessScore: number;
-  faceMatchScore: number;
-  latitude: number;
-  longitude: number;
+  livenessScore?: number;
+  faceMatchScore?: number;
+  latitude?: number;
+  longitude?: number;
 };
 
 export type AuditLogEntry = {

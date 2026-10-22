@@ -12,6 +12,17 @@ import type {
   InstructorDashboardData,
   InstructorSession,
 } from "@/lib/instructorTypes";
+import { useAuth } from "@/components/auth/AuthProvider";
+import {
+  fetchFlaggedCheckins,
+  reviewFlaggedCheckin,
+  fetchSessions,
+  createBackendSession,
+  fetchCourses,
+  fetchCheckins,
+  updateBackendSessionStatus,
+  type BackendCourse,
+} from "@/lib/instructorApi";
 
 const POLL_MS = 30_000;
 
@@ -35,6 +46,8 @@ function statusClass(status: string) {
 }
 
 export function InstructorDashboard() {
+  const { accessToken } = useAuth();
+
   const [data, setData] = useState<InstructorDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAllFlagged, setShowAllFlagged] = useState(false);
@@ -43,22 +56,122 @@ export function InstructorDashboard() {
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [created, setCreated] = useState<string | null>(null);
-  const [newCourseCode, setNewCourseCode] = useState("");
   const [auditSearch, setAuditSearch] = useState("");
   const [auditAction, setAuditAction] = useState("all");
   const [auditResult, setAuditResult] = useState("all");
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [courses, setCourses] = useState<BackendCourse[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [sessionStart, setSessionStart] = useState("");
+  const [sessionEnd, setSessionEnd] = useState("");
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [updatingSessionId, setUpdatingSessionId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/instructor/dashboard", { cache: "no-store" });
-      if (!response.ok) throw new Error("Could not load dashboard");
-      setData((await response.json()) as InstructorDashboardData);
+      const response = await fetch(
+        "/api/instructor/dashboard",
+        { cache: "no-store" },
+      );
+
+      if (!response.ok) {
+        throw new Error("Could not load dashboard");
+      }
+
+      const dashboard =
+        (await response.json()) as InstructorDashboardData;
+
+      if (accessToken) {
+        const [backendFlagged, backendSessions, backendCourses, backendCheckins,] =
+          await Promise.all([
+            fetchFlaggedCheckins(accessToken),
+            fetchSessions(accessToken),
+            fetchCourses(accessToken),
+            fetchCheckins(accessToken),
+          ]);
+
+          setCourses(backendCourses)
+
+        dashboard.flagged = backendFlagged.map((item) => ({
+          id: item.id,
+          studentName: item.student_name,
+          studentEmail: "",
+          sessionTitle: item.session_name,
+          status: item.status,
+          reason:
+            item.appeal_reason ||
+            item.risk_factors
+              .map((factor) => factor.type)
+              .join(", ") ||
+            "Risk review",
+          riskScore: item.risk_score,
+          checkedInAt: item.checked_in_at,
+        }));
+
+        dashboard.todaySessions = backendSessions.map(
+          (session) => ({
+            id: session.id,
+            title: session.name,
+            courseCode: session.course_code,
+            status:
+              session.status === "active"
+                ? "live"
+                : session.status === "cancelled"
+                  ? "closed"
+                  : session.status,
+            enrolled: session.total_enrolled,
+            checkins: session.checked_in_count,
+
+            flagged: backendFlagged.filter(
+              (item) => item.session_id === session.id,
+            ).length,
+          }),
+        );
+
+        dashboard.records = backendCheckins.map((checkin) => ({
+          checkinId: checkin.id,
+          studentId: checkin.student_id,
+          studentName: checkin.student_name,
+          studentEmail: checkin.student_email,
+          sessionId: checkin.session_id,
+          sessionName: checkin.session_name,
+          sessionDate: checkin.checked_in_at.slice(0, 10),
+          status: checkin.status,
+          checkedInAt: checkin.checked_in_at,
+          riskScore: checkin.risk_score,
+        }));
+
+        dashboard.kpis.flaggedPending =
+          dashboard.flagged.length;
+
+        dashboard.kpis.liveSessions =
+          backendSessions.filter(
+            (session) => session.status === "active",
+          ).length;
+
+        dashboard.kpis.todayCheckins = backendCheckins.length;
+
+        const approvedCount = backendCheckins.filter(
+          (checkin) => checkin.status === "approved",
+        ).length;
+
+        dashboard.kpis.approvalRate =
+          backendCheckins.length > 0
+            ? approvedCount / backendCheckins.length
+            : 0;
+      }
+
+      setData(dashboard);
       setLastFetch(new Date());
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Refresh failed");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Refresh failed",
+      );
     }
-  }, []);
+  }, [accessToken]);
 
   useEffect(() => {
     void load();
@@ -150,134 +263,128 @@ export function InstructorDashboard() {
     );
   };
 
-  function reviewCheckin(
+  async function reviewCheckin(
     checkinId: string,
     decision: "approved" | "rejected",
   ) {
-    setData((current) => {
-      if (!current) return current;
+    if (!accessToken) {
+      setError("You must be logged in to review check-ins.");
+      return;
+    }
 
-      const reviewedItem = current.flagged.find(
-        (item) => item.id === checkinId,
+    try {
+      setReviewingId(checkinId);
+      setError(null);
+
+      await reviewFlaggedCheckin(
+        checkinId,
+        decision,
+        accessToken,
       );
 
-      const reviewedRecord = current.records.find(
-        (record) => record.checkinId === checkinId,
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not review check-in",
       );
-
-      const updatedRecords = current.records.map((record) =>
-        record.checkinId === checkinId
-          ? { ...record, status: decision }
-          : record,
-      );
-
-      const updatedFlagged = current.flagged.filter(
-        (item) => item.id !== checkinId,
-      );
-
-      const updatedSessions = current.todaySessions.map((session) =>
-        session.id === reviewedRecord?.sessionId
-          ? {
-              ...session,
-              flagged: Math.max(0, session.flagged - 1),
-            }
-          : session,
-      );
-
-      const approvedCount = updatedRecords.filter(
-        (record) => record.status === "approved",
-      ).length;
-
-      const newAuditLog = {
-        id: `audit-${Date.now()}`,
-        userEmail: "instructor@saiv.local",
-        action: "checkin_reviewed",
-        resourceType: "checkin",
-        resourceId: checkinId,
-        success: true,
-        timestamp: new Date().toISOString(),
-        details: {
-          decision,
-          student: reviewedItem?.studentName ?? "Unknown student",
-        },
-      };
-
-      return {
-        ...current,
-
-        flagged: updatedFlagged,
-        records: updatedRecords,
-        todaySessions: updatedSessions,
-
-        auditLogs: [
-          newAuditLog,
-          ...current.auditLogs,
-        ],
-
-        kpis: {
-          ...current.kpis,
-          flaggedPending: updatedFlagged.length,
-          approvalRate:
-            updatedRecords.length > 0
-              ? approvedCount / updatedRecords.length
-              : 0,
-        },
-      };
-    });
+    } finally {
+      setReviewingId(null);
+    }   
   };
 
-  function createSession() {
+  async function createSession() {
+    if (!accessToken) {
+      setError("You must be logged in to create a session.");
+      return;
+    }
+
     const title = newTitle.trim();
-    const courseCode = newCourseCode.trim();
 
-    if (!title || !courseCode) return;
+    if (
+      !selectedCourseId ||
+      !title ||
+      !sessionStart ||
+      !sessionEnd
+    ) {
+      setError("Please select a course and enter a title, start time, and end time.");
+      return;
+    }
 
-    const newSession: InstructorSession = {
-      id: `session-${Date.now()}`,
-      title,
-      courseCode,
-      status: "scheduled",
-      enrolled: 0,
-      checkins: 0,
-      flagged: 0,
-    };
+    const start = new Date(sessionStart);
+    const end = new Date(sessionEnd);
 
-    const newAuditLog = {
-      id: `audit-${Date.now()}`,
-      userEmail: "instructor@saiv.local",
-      action: "session_created",
-      resourceType: "session",
-      resourceId: newSession.id,
-      success: true,
-      timestamp: new Date().toISOString(),
-      details: {
-        courseCode,
-        title,
-      },
-    };
+    if (start <= new Date()) {
+      setError("Session start time must be in the future.");
+      return;
+    }
 
-    setData((current) => {
-      if (!current) return current;
+    if (end <= start) {
+      setError("Session end time must be after the start time.");
+      return;
+    }
 
-      return {
-        ...current,
+    try {
+      setCreatingSession(true);
+      setError(null);
 
-        todaySessions: [
-          ...current.todaySessions,
-          newSession,
-        ],
-
-        auditLogs: [
-          newAuditLog,
-          ...current.auditLogs,
-        ],
-      };
+      await createBackendSession(accessToken, {
+        course_id: selectedCourseId,
+        name: title,
+        scheduled_start: start.toISOString(),
+        scheduled_end: end.toISOString(),
     });
 
     setCreated(title);
+
     setNewTitle("");
-    setNewCourseCode("");
-  };
+    setSelectedCourseId("");
+    setSessionStart("");
+    setSessionEnd("");
+
+    await load();
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Could not create session",
+    );
+  } finally {
+    setCreatingSession(false);
+  }
+}
+
+  async function changeSessionStatus(
+    sessionId: string,
+    status: "active" | "closed",
+  ) {
+    if (!accessToken) {
+      setError("You must be logged in to update sessions.");
+      return;
+    }
+
+    try {
+      setUpdatingSessionId(sessionId);
+      setError(null);
+
+      await updateBackendSessionStatus(
+        accessToken,
+        sessionId,
+        status,
+      );
+
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not update session",
+      );
+    } finally {
+      setUpdatingSessionId(null);
+    }
+  }
 
   return (
     <div className="w-full max-w-6xl space-y-4 px-4 py-6 animate-fade-up sm:px-6 sm:py-8">
@@ -317,31 +424,72 @@ export function InstructorDashboard() {
               </span>
             </div>
             <ul className="mt-4 space-y-3">
-              {(data?.todaySessions ?? []).map((session) => (
-                <SessionRow key={session.id} session={session} />
-              ))}
+            {(data?.todaySessions ?? []).map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                updating={updatingSessionId === session.id}
+                onStatusChange={(status) =>
+                  void changeSessionStatus(session.id, status)
+                }
+              />
+            ))}
             </ul>
             <form
               className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]"
               onSubmit={(e) => {
                 e.preventDefault();
-                createSession();
+                void createSession();
               }}
             >
-              <input
-                value={newCourseCode}
-                onChange={(e) => setNewCourseCode(e.target.value)}
-                placeholder="Course code"
-                className="rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none placeholder:text-white/40"
-              />
+              <select
+                value={selectedCourseId}
+                onChange={(e) =>
+                  setSelectedCourseId(e.target.value)
+                }
+                className="rounded-2xl border border-white/25 bg-sky-950/80 px-4 py-3 text-white outline-none"
+              >
+                <option value="">Select course</option>
+
+                {courses.map((course) => (
+                  <option key={course.id} value={course.id}>
+                    {course.code} — {course.name}
+                  </option>
+                ))}  
+              </select>
 
               <input
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                placeholder="New session title"
+                placeholder="Session title"
                 className="rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none placeholder:text-white/40"
               />
-              <button type="submit" className="rounded-2xl bg-white/90 px-5 py-3 font-semibold text-sky-950">
+
+              <label className="text-sm text-white/70">
+                Start time
+                <input
+                  type="datetime-local"
+                  value={sessionStart}
+                  onChange={(e) =>
+                    setSessionStart(e.target.value)
+                  }
+                  className="mt-1 w-full rounded-2xl border border-white/25 bg-sky-950/80 px-4 py-3 text-white outline-none"
+                />
+              </label>
+
+              <label className="text-sm text-white/70">
+                End time
+                <input
+                  type="datetime-local"
+                  value={sessionEnd}
+                  onChange={(e) =>
+                    setSessionEnd(e.target.value)
+                  }
+                  className="mt-1 w-full rounded-2xl border border-white/25 bg-sky-950/80 px-4 py-3 text-white outline-none"
+                />
+              </label> 
+
+              <button type="submit" disabled={creatingSession} className="rounded-2xl bg-white/90 px-5 py-3 font-semibold text-sky-950">
                 Create
               </button>
             </form>
@@ -373,10 +521,10 @@ export function InstructorDashboard() {
                     </span>
                   </div>
                   <div className="mt-2 flex gap-2">
-                    <button type="button" onClick={() => reviewCheckin(item.id, "approved")} className="rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-sky-950">
+                    <button type="button" onClick={() => void reviewCheckin(item.id, "approved")} disabled={reviewingId === item.id} className="rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-sky-950">
                       Approve
                     </button>
-                    <button type="button" onClick={() => reviewCheckin(item.id, "rejected")} className="rounded-lg border border-white/30 px-2.5 py-1 text-xs text-white">
+                    <button type="button" onClick={() => void reviewCheckin(item.id, "rejected")} disabled={reviewingId === item.id} className="rounded-lg border border-white/30 px-2.5 py-1 text-xs text-white">
                       Reject
                     </button>
                   </div>
@@ -457,6 +605,54 @@ export function InstructorDashboard() {
               Rejected attendance attempts
             </p>
           </div>
+        </div>
+        <div className="mt-6">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <h3 className="font-medium text-white">
+                Attendance status breakdown
+              </h3>
+
+              <p className="text-xs text-white/55">
+                Distribution of today&apos;s attendance records
+              </p>
+            </div>
+
+            <p className="text-xs text-white/55">
+              {attendanceAnalytics.total} total
+            </p>
+          </div>
+
+          {attendanceAnalytics.total === 0 ? (
+            <p className="rounded-2xl bg-white/10 px-4 py-6 text-center text-sm text-white/60">
+              No attendance records for today.
+            </p>
+          ) : (
+            <div className="space-y-4">
+
+              <AttendanceBar
+                label="Approved"
+                value={attendanceAnalytics.approved}
+                total={attendanceAnalytics.total}
+                barClass="bg-emerald-300"
+              />
+
+              <AttendanceBar
+                label="Flagged"
+                value={attendanceAnalytics.flagged}
+                total={attendanceAnalytics.total}
+                barClass="bg-amber-300"
+              />
+
+              <AttendanceBar
+                label="Rejected"
+                value={attendanceAnalytics.rejected}
+                total={attendanceAnalytics.total}
+                barClass="bg-rose-300"
+              />
+
+            </div>
+          )}
         </div>
       </GlassCard>
       <GlassCard className="p-5 sm:p-6">
@@ -715,20 +911,101 @@ export function InstructorDashboard() {
   );
 }
 
-function SessionRow({ session }: { session: InstructorSession }) {
+function SessionRow({
+  session,
+  updating,
+  onStatusChange,
+}: {
+  session: InstructorSession;
+  updating: boolean;
+  onStatusChange: (status: "active" | "closed") => void;
+}) {
   return (
     <li className="flex items-center justify-between gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3">
       <div>
-        <p className="font-medium text-white">{session.title}</p>
+        <p className="font-medium text-white">
+          {session.title}
+        </p>
+
         <p className="text-xs text-white/65">
-          {session.courseCode} · {session.checkins}/{session.enrolled} checked in
-          {session.flagged ? ` · ${session.flagged} flagged` : ""}
+          {session.courseCode} · {session.checkins}/
+          {session.enrolled} checked in
+          {session.flagged
+            ? ` · ${session.flagged} flagged`
+            : ""}
         </p>
       </div>
-      <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase ${statusClass(session.status)}`}>
-        {session.status}
-      </span>
+
+      <div className="flex items-center gap-2">
+        {session.status === "scheduled" && (
+          <button
+            type="button"
+            disabled={updating}
+            onClick={() => onStatusChange("active")}
+            className="rounded-lg bg-emerald-300 px-3 py-1 text-xs font-semibold text-emerald-950 disabled:opacity-50"
+          >
+            {updating ? "Updating..." : "Activate"}
+          </button>
+        )}
+
+        {session.status === "live" && (
+          <button
+            type="button"
+            disabled={updating}
+            onClick={() => onStatusChange("closed")}
+            className="rounded-lg bg-rose-300 px-3 py-1 text-xs font-semibold text-rose-950 disabled:opacity-50"
+          >
+            {updating ? "Updating..." : "Close"}
+          </button>
+        )}
+
+        <span
+          className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase ${statusClass(
+            session.status,
+          )}`}
+        >
+          {session.status}
+        </span>
+      </div>
     </li>
+  );
+}
+
+function AttendanceBar({
+  label,
+  value,
+  total,
+  barClass,
+}: {
+  label: string;
+  value: number;
+  total: number;
+  barClass: string;
+}) {
+  const percentage =
+    total > 0
+      ? Math.round((value / total) * 100)
+      : 0;
+
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between text-sm">
+        <span className="text-white/75">
+          {label}
+        </span>
+
+        <span className="font-medium text-white">
+          {value} ({percentage}%)
+        </span>
+      </div>
+
+      <div className="h-3 overflow-hidden rounded-full bg-white/15">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${barClass}`}
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+    </div>
   );
 }
 
