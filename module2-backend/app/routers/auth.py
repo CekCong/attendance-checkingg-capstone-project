@@ -14,6 +14,7 @@ import os
 from dotenv import load_dotenv
 import uuid
 from ..rate_limit import check_rate_limit as apply_rate_limit
+from ..audit import add_audit_log
 from ..security import (
     create_access_token,
     create_refresh_token,
@@ -122,6 +123,15 @@ async def register(body: RegisterBody, request: Request, db: Session = Depends(g
     )
 
     db.add(new_user)
+    db.flush()
+    add_audit_log(
+        db,
+        request,
+        "user_created",
+        user_id=new_user.id,
+        resource_type="user",
+        resource_id=new_user.id,
+    )
     db.commit()
     db.refresh(new_user)
 
@@ -153,6 +163,15 @@ async def login(
 
     existing = db.query(UserModel).filter(UserModel.email == email).first()
     if not existing:
+        add_audit_log(
+            db,
+            request,
+            "login_failed",
+            resource_type="user",
+            details="Invalid credentials",
+            success=False,
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
@@ -160,6 +179,17 @@ async def login(
 
     # Check if account is blocked due to 10+ consecutive failed attempts
     if existing.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
+        add_audit_log(
+            db,
+            request,
+            "login_failed",
+            user_id=existing.id,
+            resource_type="user",
+            resource_id=existing.id,
+            details="Account blocked after repeated failed login attempts",
+            success=False,
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Account has been blocked due to excessive failed login attempts.",
@@ -167,6 +197,17 @@ async def login(
         )
 
     if not existing.is_active:
+        add_audit_log(
+            db,
+            request,
+            "login_failed",
+            user_id=existing.id,
+            resource_type="user",
+            resource_id=existing.id,
+            details="Account disabled",
+            success=False,
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account disabled",
@@ -177,6 +218,16 @@ async def login(
 
     if not password_valid:
         existing.failed_login_attempts += 1
+        add_audit_log(
+            db,
+            request,
+            "login_failed",
+            user_id=existing.id,
+            resource_type="user",
+            resource_id=existing.id,
+            details="Invalid credentials",
+            success=False,
+        )
         db.commit()
 
         if existing.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
@@ -194,6 +245,14 @@ async def login(
     # Successful login: Reset counter and update timestamp
     existing.failed_login_attempts = 0
     existing.last_login_at = datetime.utcnow()
+    add_audit_log(
+        db,
+        request,
+        "login_success",
+        user_id=existing.id,
+        resource_type="user",
+        resource_id=existing.id,
+    )
     db.commit()
     db.refresh(existing)
 
@@ -260,7 +319,21 @@ async def refresh(
 
 
 @router.post("/logout")
-async def logout(response: Response, _user=Depends(get_current_user)):
+async def logout(
+    request: Request,
+    response: Response,
+    _user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    add_audit_log(
+        db,
+        request,
+        "logout",
+        user_id=str(_user.get("id")),
+        resource_type="user",
+        resource_id=str(_user.get("id")),
+    )
+    db.commit()
     response.delete_cookie(REFRESH_COOKIE, path="/")
     return {"ok": True}
 

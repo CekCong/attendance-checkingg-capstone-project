@@ -8,6 +8,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 import os
 from dotenv import load_dotenv
 from ..models import CourseModel as Course, UserModel as User, SessionModel
+from ..course_access import require_course_staff_access, staff_course_ids
 
 from app.security import get_current_user, require_roles
 
@@ -133,6 +134,8 @@ def list_courses(
         )
 
     query = db.query(Course)
+    if current_user.get("role") in {"instructor", "ta"}:
+        query = query.filter(Course.id.in_(staff_course_ids(db, current_user)))
 
     if is_active is not None:
         query = query.filter(Course.is_active == is_active)
@@ -216,10 +219,10 @@ def create_course(
     # Verify instructor exists if provided
     if payload.instructor_id:
         instructor = db.query(User).filter(User.id == str(payload.instructor_id)).first()
-        if not instructor:
+        if not instructor or instructor.role != "instructor":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Instructor with ID '{payload.instructor_id}' not found."
+                detail=f"Valid instructor with ID '{payload.instructor_id}' not found."
             )
 
     # Extract fields excluding instructor_id since Course doesn't store it directly
@@ -277,6 +280,8 @@ def get_course_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Course with ID '{course_id}' not found."
         )
+    if _current_user.get("role") in {"instructor", "ta"}:
+        require_course_staff_access(db, _current_user, course_id)
 
     # Fetch associated instructor via SessionModel if needed
     session_instructor = (

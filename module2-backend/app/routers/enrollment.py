@@ -8,6 +8,7 @@ from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, func, crea
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, Session, relationship, sessionmaker
 from ..security import get_current_user
+from ..course_access import require_course_staff_access
 from ..database import get_db as shared_get_db
 import os
 from dotenv import load_dotenv
@@ -125,6 +126,8 @@ def create_enrollment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Student or course not found."
         )
+    if user_role == "instructor":
+        require_course_staff_access(db, current_user, course_id)
 
     existing_enrollment = (
         db.query(Enrollment)
@@ -162,7 +165,7 @@ def create_enrollment(
         is_active=new_enrollment.is_active
     )
 
-router.post("/bulk", response_model=BulkEnrollmentResponse, status_code=status.HTTP_200_OK)
+@router.post("/bulk", response_model=BulkEnrollmentResponse, status_code=status.HTTP_200_OK)
 def bulk_enroll_students(
     payload: BulkEnrollmentRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -187,6 +190,8 @@ def bulk_enroll_students(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Course with ID '{payload.course_id}' not found."
         )
+    if user_role == "instructor":
+        require_course_staff_access(db, current_user, course_id)
 
     enrolled_count = 0
     already_enrolled_count = 0
@@ -340,6 +345,8 @@ def get_course_enrollments(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Course with ID '{course_id}' not found."
         )
+    if current_user.get("role") in {"instructor", "ta"}:
+        require_course_staff_access(db, current_user, course_id_str)
 
     query = (
         db.query(Enrollment)
@@ -415,6 +422,7 @@ def delete_enrollment(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials."
             )
+        require_course_staff_access(db, current_user, enrollment.course_id)
 
     db.delete(enrollment)
     db.commit()

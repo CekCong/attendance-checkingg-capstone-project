@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum, ForeignKey, create_engine, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 from app.security import get_current_user
 from app.database import get_db as shared_get_db
 from app.models import UserModel as User, SessionModel, EnrollmentModel
+from app.store import hash_password
+from app.audit import add_audit_log
 
 # --- Database Setup ---
 load_dotenv()
@@ -90,10 +92,6 @@ class EnrollmentResponse(BaseModel):
     class Config:
         from_attributes = True
 
-# --- Password Helper ---
-def hash_password(password: str) -> str:
-    return f"hashed_{password}"
-
 # --- Admin Guard Helper ---
 def require_admin(current_user: Dict[str, Any] = Depends(get_current_user)):
     if current_user.get("role") != UserRole.admin.value:
@@ -145,6 +143,7 @@ def activate_user(
 @router.post("/users/bulk", response_model=List[UserResponse], status_code=status.HTTP_201_CREATED)
 def bulk_create_users(
     users_data: List[UserCreate],
+    request: Request,
     _: Dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
@@ -175,6 +174,17 @@ def bulk_create_users(
         created_users.append(user)
 
     try:
+        db.flush()
+        for user in created_users:
+            add_audit_log(
+                db,
+                request,
+                "user_created",
+                user_id=user.id,
+                resource_type="user",
+                resource_id=user.id,
+                details="Created by admin bulk-user endpoint",
+            )
         db.commit()
         for user in created_users:
             db.refresh(user)

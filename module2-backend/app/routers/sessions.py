@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from app.security import get_current_user
 from app.models import CourseModel as Course, SessionModel, EnrollmentModel as CourseEnrollment, CheckinModel as AttendanceRecord
 from app.database import get_db
+from app.course_access import require_course_staff_access, staff_course_ids
 
 # --- Database & Base Setup ---
 load_dotenv()
@@ -183,23 +184,8 @@ def create_session(
             detail=f"Course with ID '{payload.course_id}' not found."
         )
 
-    assigned_session = (
-        db.query(SessionModel)
-        .filter(
-            SessionModel.course_id == course.id,
-            SessionModel.instructor_id.isnot(None),
-        )
-        .first()
-    )
-    if (
-        current_user.get("role") != "admin"
-        and assigned_session
-        and assigned_session.instructor_id != current_user.get("id")
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. You can only create sessions for courses you teach."
-        )
+    if current_user.get("role") == "instructor":
+        require_course_staff_access(db, current_user, course.id)
 
     session_data = payload.model_dump()
 
@@ -243,13 +229,15 @@ def list_sessions(
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user.get("role") not in ["instructor", "admin"]:
+    if current_user.get("role") not in ["instructor", "ta", "admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Instructor or admin permissions required."
+            detail="Access denied. Instructor, TA, or admin permissions required."
         )
 
     query = db.query(SessionModel)
+    if current_user.get("role") in {"instructor", "ta"}:
+        query = query.filter(SessionModel.course_id.in_(staff_course_ids(db, current_user)))
 
     if status_filter:
         query = query.filter(SessionModel.status == status_filter)
@@ -352,12 +340,19 @@ def list_my_sessions(
 
     query = db.query(SessionModel)
 
-    if user_role in ["instructor", "admin"]:
+    if user_role == "instructor":
+        query = query.filter(SessionModel.instructor_id == user_id)
+    elif user_role == "ta":
+        query = query.filter(SessionModel.course_id.in_(staff_course_ids(db, current_user)))
+    elif user_role == "admin":
         query = query.filter(SessionModel.instructor_id == user_id)
     else:
         enrolled_course_ids = (
             db.query(CourseEnrollment.course_id)
-            .filter(CourseEnrollment.student_id == user_id)
+            .filter(
+                CourseEnrollment.student_id == user_id,
+                CourseEnrollment.is_active.is_(True),
+            )
             .subquery()
         )
         query = query.filter(SessionModel.course_id.in_(enrolled_course_ids))
@@ -391,6 +386,8 @@ def get_session_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session with ID '{id}' not found."
         )
+    if current_user.get("role") in {"instructor", "ta"}:
+        require_course_staff_access(db, current_user, session_obj.course_id)
     
     response = SessionResponse.model_validate(session_obj)
     response.qr_code_enabled = bool(session_obj.qr_code_secret)

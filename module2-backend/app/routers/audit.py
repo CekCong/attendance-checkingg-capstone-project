@@ -1,38 +1,18 @@
 import uuid
 from datetime import datetime
-from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, String, Text, Boolean, DateTime, Enum as SQLEnum, ForeignKey, create_engine, func
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
-import enum
-import os
-from dotenv import load_dotenv
+from sqlalchemy.orm import Session
 
-from app.security import get_current_user, require_roles
+from ..database import get_db
+from ..models import AuditLogModel
+from ..security import require_roles
 
-# --- Database Setup ---
-load_dotenv()
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://postgres:your_password@localhost:5432/your_database"
-)
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base = declarative_base()
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-# --- Enum Definition matching PostgreSQL CREATE TABLE ---
-class AuditAction(str, enum.Enum):
+class AuditAction(str, Enum):
     login_success = "login_success"
     login_failed = "login_failed"
     logout = "logout"
@@ -43,20 +23,15 @@ class AuditAction(str, enum.Enum):
     data_exported = "data_exported"
     security_violation = "security_violation"
 
-# --- SQLAlchemy Model ---
-from models import AuditLogModel as AuditLog
 
-# --- Pydantic Schemas ---
 class AuditLogCreate(BaseModel):
-    user_id: Optional[str] = None
     action: AuditAction
     resource_type: Optional[str] = Field(None, max_length=50)
     resource_id: Optional[str] = Field(None, max_length=36)
-    ip_address: Optional[str] = Field(None, max_length=45)
-    user_agent: Optional[str] = Field(None, max_length=500)
     device_id: Optional[str] = Field(None, max_length=36)
     details: Optional[str] = None
-    success: Optional[bool] = True
+    success: bool = True
+
 
 class AuditLogResponse(BaseModel):
     id: str
@@ -74,71 +49,69 @@ class AuditLogResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
 class AuditLogListResponse(BaseModel):
     items: List[AuditLogResponse]
     total: int
     limit: int
     offset: int
 
-# --- Router Implementation (app/routers/audit.py) ---
+
 router = APIRouter(prefix="/audit", tags=["Audit Logs"])
 
-# GET /audit/logs - Retrieve audit logs
-@router.get("/logs", response_model=AuditLogListResponse)
-def get_audit_logs(
-    skip: int = Query(0, ge=0, alias="offset"),
-    limit: int = Query(50, ge=1, le=100),
-    user_id: Optional[str] = Query(None, description="Filter logs by User ID"),
-    action: Optional[AuditAction] = Query(None, description="Filter logs by Action type"),
-    resource_type: Optional[str] = Query(None, description="Filter logs by Resource Type"),
-    success: Optional[bool] = Query(None, description="Filter logs by success/failure status"),
-    _admin: Dict[str, Any] = Depends(require_roles("admin")),
-    db: Session = Depends(get_db)
-):
-    query = db.query(AuditLog)
 
+@router.get("/logs", response_model=AuditLogListResponse)
+@router.get("", response_model=AuditLogListResponse)
+@router.get("/", response_model=AuditLogListResponse)
+def get_audit_logs(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    user_id: Optional[str] = Query(None),
+    action: Optional[AuditAction] = Query(None),
+    resource_type: Optional[str] = Query(None),
+    success: Optional[bool] = Query(None),
+    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    query = db.query(AuditLogModel)
     if user_id:
-        query = query.filter(AuditLog.user_id == user_id)
+        query = query.filter(AuditLogModel.user_id == user_id)
     if action:
-        query = query.filter(AuditLog.action == action)
+        query = query.filter(AuditLogModel.action == action.value)
     if resource_type:
-        query = query.filter(AuditLog.resource_type == resource_type)
+        query = query.filter(AuditLogModel.resource_type == resource_type)
     if success is not None:
-        query = query.filter(AuditLog.success == success)
+        query = query.filter(AuditLogModel.success == success)
 
     total = query.count()
-    items = query.order_by(AuditLog.timestamp.desc()).offset(skip).limit(limit).all()
+    items = (
+        query.order_by(AuditLogModel.timestamp.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
-    return {
-        "items": items,
-        "total": total,
-        "limit": limit,
-        "offset": skip
-    }
 
-
-# POST /audit/logs - Create audit entry
 @router.post("/logs", response_model=AuditLogResponse, status_code=status.HTTP_201_CREATED)
 def create_audit_log(
     payload: AuditLogCreate,
     request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: Dict[str, Any] = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
 ):
-    # Auto-populate user_id, ip_address, and user_agent if omitted in payload
-    log_data = payload.model_dump()
-    if not log_data.get("user_id"):
-        log_data["user_id"] = current_user.get("id")
-    if not log_data.get("ip_address"):
-        log_data["ip_address"] = request.client.host if request.client else None
-    if not log_data.get("user_agent"):
-        log_data["user_agent"] = request.headers.get("user-agent")
-
-    audit_entry = AuditLog(
+    audit_entry = AuditLogModel(
         id=str(uuid.uuid4()),
-        **log_data
+        user_id=current_user.get("id"),
+        action=payload.action.value,
+        resource_type=payload.resource_type,
+        resource_id=payload.resource_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        device_id=payload.device_id,
+        details=payload.details,
+        success=payload.success,
     )
-
     db.add(audit_entry)
     db.commit()
     db.refresh(audit_entry)

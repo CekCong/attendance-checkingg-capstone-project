@@ -5,9 +5,13 @@ from __future__ import annotations
 from typing import Literal, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from ..course_access import require_course_staff_access
+from ..database import get_db
+from ..models import CourseModel, SessionModel
 from ..security import require_roles
 
 router = APIRouter(tags=["observability"])
@@ -44,7 +48,19 @@ async def stats_overview(_user=Depends(INSTRUCTOR)):
 
 
 @router.get("/stats/sessions/{session_id}")
-async def stats_session(session_id: str, _user=Depends(INSTRUCTOR)):
+async def stats_session(
+    session_id: str,
+    _user=Depends(INSTRUCTOR),
+    db: Session = Depends(get_db),
+):
+    session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session with ID '{session_id}' not found.",
+        )
+    if _user.get("role") == "instructor":
+        require_course_staff_access(db, _user, session.course_id)
     return {
         "session_id": session_id,
         "session_name": "CS101 Lecture 4",
@@ -58,7 +74,19 @@ async def stats_session(session_id: str, _user=Depends(INSTRUCTOR)):
 
 
 @router.get("/stats/courses/{course_id}")
-async def stats_course(course_id: str, _user=Depends(INSTRUCTOR)):
+async def stats_course(
+    course_id: str,
+    _user=Depends(INSTRUCTOR),
+    db: Session = Depends(get_db),
+):
+    course = db.query(CourseModel).filter(CourseModel.id == course_id).first()
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Course with ID '{course_id}' not found.",
+        )
+    if _user.get("role") == "instructor":
+        require_course_staff_access(db, _user, course_id)
     return {
         "course_id": course_id,
         "course_code": "CS101",
@@ -148,7 +176,17 @@ async def export_session(
     session_id: str,
     format: Literal["csv", "json"] = Query("csv"),
     _user=Depends(INSTRUCTOR),
+    db: Session = Depends(get_db),
 ):
+    session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session with ID '{session_id}' not found.",
+        )
+    if _user.get("role") == "instructor":
+        require_course_staff_access(db, _user, session.course_id)
+
     records = [
         {
             "checkin_id": "chk-a1",

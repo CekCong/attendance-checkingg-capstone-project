@@ -11,6 +11,8 @@ from ..security import get_current_user
 from ..rate_limit import client_ip
 from ..database import get_db as shared_get_db
 from ..models import CheckinModel, DeviceModel, SessionModel, UserModel as User
+from ..audit import add_audit_log
+from ..course_access import require_course_staff_access, staff_course_ids
 from ..services.face_client import (
     FaceServiceError,
     assess_risk,
@@ -203,10 +205,20 @@ def get_flagged_checkins(
         .join(AttendanceRecord.student)
         .filter(AttendanceRecord.status.in_([CheckinStatus.flagged.value, CheckinStatus.appealed.value]))
     )
+    if current_user.get("role") in {"instructor", "ta"}:
+        query = query.filter(SessionModel.course_id.in_(staff_course_ids(db, current_user)))
 
     if course_id:
+        if current_user.get("role") in {"instructor", "ta"}:
+            require_course_staff_access(db, current_user, str(course_id))
         query = query.filter(SessionModel.course_id == str(course_id))
     if session_id:
+        if current_user.get("role") in {"instructor", "ta"}:
+            requested_session = db.query(SessionModel).filter(
+                SessionModel.id == str(session_id)
+            ).first()
+            if requested_session:
+                require_course_staff_access(db, current_user, requested_session.course_id)
         query = query.filter(AttendanceRecord.session_id == str(session_id))
 
     total = query.count()
@@ -298,6 +310,12 @@ def get_checkin_detail(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You do not have permission to view this check-in."
         )
+    if user_role in {"instructor", "ta"}:
+        session_obj = db.query(SessionModel).filter(
+            SessionModel.id == record.session_id
+        ).first()
+        if session_obj:
+            require_course_staff_access(db, current_user, session_obj.course_id)
 
     return record
 
@@ -323,7 +341,6 @@ def appeal_checkin(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Check-in with ID '{id}' not found."
         )
-
     if record.student_id != student_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -384,6 +401,12 @@ def review_checkin(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Check-in with ID '{id}' not found."
         )
+    if reviewer_role in {"instructor", "ta"}:
+        session_obj = db.query(SessionModel).filter(
+            SessionModel.id == record.session_id
+        ).first()
+        if session_obj:
+            require_course_staff_access(db, current_user, session_obj.course_id)
 
     reviewer_id = str(current_user.get("id"))
     now = datetime.now(timezone.utc)
@@ -421,10 +444,22 @@ def list_checkins(
         )
 
     query = db.query(AttendanceRecord).join(AttendanceRecord.session).join(AttendanceRecord.student)
+    if current_user.get("role") == "instructor":
+        query = query.filter(
+            SessionModel.course_id.in_(staff_course_ids(db, current_user))
+        )
 
     if session_id:
+        if current_user.get("role") == "instructor":
+            requested_session = db.query(SessionModel).filter(
+                SessionModel.id == str(session_id)
+            ).first()
+            if requested_session:
+                require_course_staff_access(db, current_user, requested_session.course_id)
         query = query.filter(AttendanceRecord.session_id == str(session_id))
     if course_id:
+        if current_user.get("role") == "instructor":
+            require_course_staff_access(db, current_user, str(course_id))
         query = query.filter(SessionModel.course_id == str(course_id))
     if student_id:
         query = query.filter(AttendanceRecord.student_id == str(student_id))
@@ -750,6 +785,27 @@ async def create_checkin(
     )
 
     db.add(new_record)
+    add_audit_log(
+        db,
+        request,
+        "checkin_attempted",
+        user_id=student_id,
+        resource_type="checkin",
+        resource_id=new_record.id,
+        details=f"session_id={session_id}; status={checkin_status.value}; risk_score={total_risk}",
+        success=checkin_status != CheckinStatus.rejected,
+    )
+    if checkin_status in (CheckinStatus.approved, CheckinStatus.rejected):
+        add_audit_log(
+            db,
+            request,
+            "checkin_approved" if checkin_status == CheckinStatus.approved else "checkin_rejected",
+            user_id=student_id,
+            resource_type="checkin",
+            resource_id=new_record.id,
+            details=f"session_id={session_id}; risk_score={total_risk}",
+            success=checkin_status == CheckinStatus.approved,
+        )
     db.commit()
     db.refresh(new_record)
 
