@@ -21,6 +21,7 @@ import {
   fetchCourses,
   fetchCheckins,
   updateBackendSessionStatus,
+  fetchAuditLogs,
   type BackendCourse,
 } from "@/lib/instructorApi";
 
@@ -82,12 +83,13 @@ export function InstructorDashboard() {
         (await response.json()) as InstructorDashboardData;
 
       if (accessToken) {
-        const [backendFlagged, backendSessions, backendCourses, backendCheckins,] =
+        const [backendFlagged, backendSessions, backendCourses, backendCheckins, backendAuditLogs,] =
           await Promise.all([
             fetchFlaggedCheckins(accessToken),
             fetchSessions(accessToken),
             fetchCourses(accessToken),
             fetchCheckins(accessToken),
+            fetchAuditLogs(accessToken),
           ]);
 
           setCourses(backendCourses)
@@ -139,6 +141,21 @@ export function InstructorDashboard() {
           status: checkin.status,
           checkedInAt: checkin.checked_in_at,
           riskScore: checkin.risk_score,
+        }));
+
+        dashboard.auditLogs = backendAuditLogs.map((log) => ({
+          id: log.id,
+          userEmail: log.user_id ?? "System",
+
+          action: log.action,
+          resourceType: log.resource_type ?? "",
+          resourceId: log.resource_id ?? "",
+          success: log.success,
+          timestamp: log.timestamp,
+
+          details: {
+            message: log.details ?? "",
+          },
         }));
 
         dashboard.kpis.flaggedPending =

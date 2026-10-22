@@ -44,7 +44,7 @@ class AuditAction(str, enum.Enum):
     security_violation = "security_violation"
 
 # --- SQLAlchemy Model ---
-from models import AuditLogModel as AuditLog
+from ..models import AuditLogModel as AuditLog
 
 # --- Pydantic Schemas ---
 class AuditLogCreate(BaseModel):
@@ -92,7 +92,7 @@ def get_audit_logs(
     action: Optional[AuditAction] = Query(None, description="Filter logs by Action type"),
     resource_type: Optional[str] = Query(None, description="Filter logs by Resource Type"),
     success: Optional[bool] = Query(None, description="Filter logs by success/failure status"),
-    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+    _user: Dict[str, Any] = Depends(require_roles("instructor", "admin")),
     db: Session = Depends(get_db)
 ):
     query = db.query(AuditLog)

@@ -79,11 +79,31 @@ Health
 - GET /health
 """
 
-from fastapi import FastAPI
+import time
+
+from fastapi import FastAPI, Request, Response
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    Counter,
+    Histogram,
+    generate_latest,
+)
 from fastapi.middleware.cors import CORSMiddleware
 
 from contextlib import asynccontextmanager
-from .routers import admin, auth, checkins, courses, devices, enrollment, observability, rbac_stubs, sessions, users
+from .routers import (
+    admin,
+    audit,
+    auth,
+    checkins,
+    courses,
+    devices,
+    enrollment,
+    observability,
+    rbac_stubs,
+    sessions,
+    users,
+)
 from .database import engine, Base
 from . import models
 
@@ -102,6 +122,54 @@ app = FastAPI(
     version="1.0.0",
 )
 
+HTTP_REQUESTS = Counter(
+    "saiv_http_requests_total",
+    "Total number of HTTP requests",
+    ["method", "path", "status"],
+)
+
+HTTP_REQUEST_DURATION = Histogram(
+    "saiv_http_request_duration_seconds",
+    "HTTP request duration in seconds",
+    ["method", "path"],
+)
+
+@app.middleware("http")
+async def prometheus_metrics(request: Request, call_next):
+    if request.url.path == "/metrics":
+        return await call_next(request)
+
+    start = time.perf_counter()
+    status = "500"
+
+    try:
+        response = await call_next(request)
+        status = str(response.status_code)
+        return response
+    finally:
+        duration = time.perf_counter() - start
+
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path)
+
+        HTTP_REQUESTS.labels(
+            method=request.method,
+            path=path,
+            status=status,
+        ).inc()
+
+        HTTP_REQUEST_DURATION.labels(
+            method=request.method,
+            path=path,
+        ).observe(duration)
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://localhost:8501"],
@@ -119,6 +187,7 @@ app.include_router(enrollment.router, prefix="/api/v1")
 app.include_router(checkins.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(observability.router, prefix="/api/v1")
+app.include_router(audit.router, prefix="/api/v1")
 app.include_router(rbac_stubs.router, prefix="/api/v1")
 
 

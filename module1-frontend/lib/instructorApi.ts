@@ -258,3 +258,37 @@ export async function updateBackendSessionStatus(
 
   return response.json();
 }
+
+export type BackendAuditLog = {
+  id: string;
+  user_id?: string | null;
+  action: string;
+  resource_type?: string | null;
+  resource_id?: string | null;
+  success: boolean;
+  timestamp: string;
+  details?: string | null;
+};
+
+export async function fetchAuditLogs(accessToken: string,): 
+Promise<BackendAuditLog[]> {
+  const response = await fetch(
+    `${API_BASE}/api/v1/audit/logs?limit=100`,
+    {
+      headers: authHeaders(accessToken),
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+
+    throw new Error(
+      error?.detail ?? "Unable to load audit logs",
+    );
+  }
+
+  const data = await response.json();
+
+  return data.items ?? [];
+}
