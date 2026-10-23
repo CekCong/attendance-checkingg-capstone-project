@@ -349,7 +349,7 @@ def get_course_enrollments(
         require_course_staff_access(db, current_user, course_id_str)
 
     query = (
-        db.query(Enrollment)
+        db.query(Enrollment, User)
         .join(User, Enrollment.student_id == User.id)
         .filter(Enrollment.course_id == course_id_str)
     )
@@ -371,14 +371,14 @@ def get_course_enrollments(
     students_data = [
         EnrolledStudentDetail(
             id=enr.id,
-            student_id=enr.student.id,
-            student_email=enr.student.email,
-            student_name=enr.student.full_name,
+            student_id=student.id,
+            student_email=student.email,
+            student_name=student.full_name,
             enrolled_at=enr.enrolled_at,
             is_active=enr.is_active,
-            face_enrolled=getattr(enr.student, "face_enrolled", False)
+            face_enrolled=student.face_enrolled
         )
-        for enr in enrollments if getattr(enr, "student", None)
+        for enr, student in enrollments
     ]
 
     return CourseEnrollmentResponse(

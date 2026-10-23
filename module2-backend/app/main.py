@@ -83,7 +83,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from contextlib import asynccontextmanager
-from .routers import admin, audit, auth, checkins, courses, devices, enrollment, export, observability, rbac_stubs, sessions, stats, users
+from .routers import admin, audit, auth, checkins, courses, devices, enrollment, export, rbac_stubs, sessions, stats, users
 from .database import engine, Base
 from . import models
 
@@ -121,7 +121,6 @@ app.include_router(users.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(stats.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")
-app.include_router(observability.router, prefix="/api/v1")
 app.include_router(rbac_stubs.router, prefix="/api/v1")
 
 
