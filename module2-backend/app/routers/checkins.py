@@ -751,7 +751,15 @@ async def create_checkin(
 
     total_risk = round(min(max(local_risk, module3_risk), 1.0), 4)
 
-    if geofence_exceeded_critical or outside_singapore_ip:
+    verification_failed = (
+        bool(payload.liveness_challenge_response)
+        and (
+            (session_obj.require_liveness_check and liveness_passed is False)
+            or (session_obj.require_face_match and face_match_passed is False)
+        )
+    )
+
+    if geofence_exceeded_critical or outside_singapore_ip or verification_failed:
         checkin_status = CheckinStatus.rejected
     else:
         threshold = session_obj.risk_threshold or 0.50
