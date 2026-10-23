@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from ..models import CourseModel as Course, UserModel as User, SessionModel
 from ..course_access import require_course_staff_access, staff_course_ids
 
-from app.security import get_current_user, require_roles
+from app.security import get_current_user, get_optional_current_user, require_roles
 
 # 1: Database Setup ---
 load_dotenv()
@@ -121,20 +121,14 @@ def list_courses(
     instructor_id: Optional[uuid.UUID] = Query(None, description="Filter by instructor (admin only)"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    List courses with optional filters. **Requires auth.**
+    List courses with optional filters. Authentication is optional.
     """
-    if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials."
-        )
-
     query = db.query(Course)
-    if current_user.get("role") in {"instructor", "ta"}:
+    if current_user and current_user.get("role") in {"instructor", "ta"}:
         query = query.filter(Course.id.in_(staff_course_ids(db, current_user)))
 
     if is_active is not None:
@@ -144,7 +138,7 @@ def list_courses(
         query = query.filter(Course.semester == semester)
 
     if instructor_id:
-        if current_user.get("role") != "admin":
+        if not current_user or current_user.get("role") != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Filtering by instructor_id is restricted to administrators."

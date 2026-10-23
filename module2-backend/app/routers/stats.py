@@ -1,637 +1,552 @@
-import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict, Any
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Column, String, Float, DateTime, ForeignKey, func, cast, Date, create_engine
-from sqlalchemy.dialects.postgresql import UUID, ENUM as PG_ENUM
-from sqlalchemy.orm import declarative_base, Session, relationship, sessionmaker
-import enum
-import os
-from dotenv import load_dotenv
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
-from security import get_current_user
-
-load_dotenv()
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://postgres:your_password@localhost:5432/your_database"
+from ..course_access import require_course_staff_access, staff_course_ids
+from ..database import get_db
+from ..models import (
+    CheckinModel,
+    CourseModel,
+    EnrollmentModel,
+    SessionModel,
+    UserModel,
 )
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base = declarative_base()
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-
-# =====================================================================
-# Database Models & Enums
-# =====================================================================
-
-
-
-class CheckinStatus(str, enum.Enum):
-    pending = "pending"
-    approved = "approved"
-    flagged = "flagged"
-    rejected = "rejected"
-    appealed = "appealed"
-
-class SessionStatus(str, enum.Enum):
-    scheduled = "scheduled"
-    active = "active"
-    closed = "closed"
-    cancelled = "cancelled"
-
-class RiskSignalSeverity(str, enum.Enum):
-    low = "low"
-    medium = "medium"
-    high = "high"
-    critical = "critical"
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    full_name = Column(String(255), nullable=False)
-    email = Column(String(255), nullable=False)
-
-class Course(Base):
-    __tablename__ = "courses"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    code = Column(String(20), nullable=False)
-    name = Column(String(255), nullable=False)
-
-class Enrollment(Base):
-    __tablename__ = "enrollments"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
-
-    course = relationship("Course", backref="enrollments")
-    student = relationship("User", backref="enrollments")
-
-class SessionModel(Base):
-    __tablename__ = "sessions"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id"), nullable=False)
-    instructor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    name = Column(String(255), nullable=False)
-    scheduled_start = Column(DateTime(timezone=True), nullable=False)
-    status = Column(
-        PG_ENUM(SessionStatus, name="session_status", create_type=False),
-        nullable=False,
-        default=SessionStatus.scheduled
-    )
-
-    course = relationship("Course", backref="sessions")
-
-class Checkin(Base):
-    __tablename__ = "checkins"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False)
-    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    status = Column(
-        PG_ENUM(CheckinStatus, name="checkin_status", create_type=False),
-        nullable=False
-    )
-    checked_in_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    distance_from_venue_meters = Column(Float, nullable=True)
-    risk_score = Column(Float, nullable=False, default=0.0)
-
-    session = relationship("SessionModel", backref="checkins")
-    student = relationship("User", backref="checkins")
-    risk_signals = relationship("RiskSignal", backref="checkin", cascade="all, delete-orphan")
-
-class RiskSignal(Base):
-    __tablename__ = "risk_signals"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    checkin_id = Column(UUID(as_uuid=True), ForeignKey("checkins.id"), nullable=False)
-    severity = Column(
-        PG_ENUM(RiskSignalSeverity, name="risk_signal_severity", create_type=False),
-        nullable=False
-    )
-    detected_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-
-# =====================================================================
-# Pydantic Schemas
-# =====================================================================
-
-# --- Overview Schemas ---
-class DailyCheckinTrend(BaseModel):
-    date: str
-    count: int
-
-class DailyAttendanceRateTrend(BaseModel):
-    date: str
-    rate: float
-
-class TrendsData(BaseModel):
-    checkins_by_day: List[DailyCheckinTrend]
-    attendance_rate_by_day: List[DailyAttendanceRateTrend]
-
-class StatsOverviewResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    total_sessions: int
-    active_sessions: int
-    total_checkins_today: int
-    total_checkins_week: int
-    average_attendance_rate: float
-    flagged_pending_review: int
-    approval_rate: float
-    average_risk_score: float
-    high_risk_checkins_today: int
-    trends: TrendsData
-
-# --- Session Stats Schemas ---
-class ByStatus(BaseModel):
-    approved: int = 0
-    flagged: int = 0
-    rejected: int = 0
-    pending: int = 0
-
-class RiskDistribution(BaseModel):
-    low: int = 0
-    medium: int = 0
-    high: int = 0
-
-class CheckinTimelineBucket(BaseModel):
-    minute: int
-    count: int
-
-class SessionStatsResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    session_id: uuid.UUID
-    session_name: str
-    course_code: str
-    scheduled_start: datetime
-    status: SessionStatus
-    total_enrolled: int
-    checked_in: int
-    attendance_rate: float
-    by_status: ByStatus
-    average_risk_score: float
-    average_distance_meters: float
-    average_checkin_time_minutes: float
-    risk_distribution: RiskDistribution
-    checkin_timeline: List[CheckinTimelineBucket]
-
-# --- Course Stats Schemas ---
-class SessionAttendanceSummary(BaseModel):
-    session_id: uuid.UUID
-    name: str
-    date: str
-    attendance_rate: float
-    checked_in: int
-
-class StudentAttendanceSummary(BaseModel):
-    student_id: uuid.UUID
-    student_name: str
-    sessions_attended: int
-    attendance_rate: float
-    average_risk_score: float
-
-class LowAttendanceAlert(BaseModel):
-    student_id: uuid.UUID
-    student_name: str
-    attendance_rate: float
-    sessions_missed: int
-
-class CourseStatsResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    course_id: uuid.UUID
-    course_code: str
-    course_name: str
-    total_sessions: int
-    total_enrolled: int
-    overall_attendance_rate: float
-    sessions: List[SessionAttendanceSummary]
-    student_attendance: List[StudentAttendanceSummary]
-    low_attendance_alerts: List[LowAttendanceAlert]
-
-# --- Student Stats Schemas ---
-class StudentCourseStats(BaseModel):
-    course_id: uuid.UUID
-    course_code: str
-    attendance_rate: float
-    sessions_attended: int
-    total_sessions: int
-    average_risk_score: float
-
-class StudentRecentCheckin(BaseModel):
-    session_name: str
-    course_code: str
-    checked_in_at: datetime
-    status: CheckinStatus
-
-class StudentStatsResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    student_id: uuid.UUID
-    student_name: str
-    student_email: str
-    courses: List[StudentCourseStats]
-    recent_checkins: List[StudentRecentCheckin]
-
-
-# =====================================================================
-# API Endpoints Router
-# =====================================================================
+from ..security import require_roles
 
 router = APIRouter(prefix="/stats", tags=["Statistics"])
 
-# 1. GET /stats/overview
-@router.get("/overview", response_model=StatsOverviewResponse, status_code=status.HTTP_200_OK)
-def get_stats_overview(
-    course_id: Optional[uuid.UUID] = Query(None, description="Filter stats by course"),
-    days: int = Query(7, ge=1, le=365, description="Number of days for trends"),
-    current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.get("role") not in ["instructor", "admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Instructor or admin permissions required."
-        )
+INSTRUCTOR_OR_ADMIN = require_roles("instructor", "admin")
+STAFF = require_roles("ta", "instructor", "admin")
 
-    now = datetime.now(timezone.utc)
-    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    week_start = now - timedelta(days=7)
-    trend_start_datetime = datetime.combine((now - timedelta(days=days - 1)).date(), datetime.min.time(), tzinfo=timezone.utc)
 
-    session_query = db.query(SessionModel)
-    if course_id:
-        session_query = session_query.filter(SessionModel.course_id == course_id)
+def _scoped_course_ids(db: Session, user: Dict[str, Any]) -> Optional[list[str]]:
+    if user.get("role") == "admin":
+        return None
+    return staff_course_ids(db, user)
 
-    total_sessions = session_query.count()
-    active_sessions = session_query.filter(SessionModel.status == SessionStatus.active).count()
 
-    checkin_query = db.query(Checkin).join(Checkin.session)
-    if course_id:
-        checkin_query = checkin_query.filter(SessionModel.course_id == course_id)
-
-    total_checkins_today = checkin_query.filter(Checkin.checked_in_at >= today_start).count()
-    total_checkins_week = checkin_query.filter(Checkin.checked_in_at >= week_start).count()
-
-    flagged_pending_review = checkin_query.filter(
-        Checkin.status.in_([CheckinStatus.flagged, CheckinStatus.appealed])
-    ).count()
-
-    high_risk_query = (
-        db.query(func.count(func.distinct(Checkin.id)))
-        .join(Checkin.session)
-        .join(Checkin.risk_signals)
-        .filter(
-            Checkin.checked_in_at >= today_start,
-            RiskSignal.severity.in_([RiskSignalSeverity.high, RiskSignalSeverity.critical])
-        )
-    )
-    if course_id:
-        high_risk_query = high_risk_query.filter(SessionModel.course_id == course_id)
-    high_risk_count = high_risk_query.scalar() or 0
-
-    total_checkins_count = checkin_query.count()
-    if total_checkins_count > 0:
-        approved_count = checkin_query.filter(Checkin.status == CheckinStatus.approved).count()
-        approval_rate = round(approved_count / total_checkins_count, 2)
-        avg_risk = checkin_query.with_entities(func.avg(Checkin.risk_score)).scalar()
-        average_risk_score = round(float(avg_risk), 2) if avg_risk is not None else 0.0
-        average_attendance_rate = round(approved_count / total_checkins_count, 2)
-    else:
-        approval_rate = 0.0
-        average_risk_score = 0.0
-        average_attendance_rate = 0.0
-
-    daily_records = (
-        checkin_query
-        .filter(Checkin.checked_in_at >= trend_start_datetime)
-        .with_entities(
-            cast(Checkin.checked_in_at, Date).label("checkin_date"),
-            Checkin.status,
-            func.count(Checkin.id).label("count")
-        )
-        .group_by("checkin_date", Checkin.status)
-        .all()
-    )
-
-    daily_totals: Dict[str, int] = {}
-    daily_approved: Dict[str, int] = {}
-
-    for row in daily_records:
-        if not row.checkin_date:
-            continue
-        d_str = row.checkin_date.strftime("%Y-%m-%d")
-        daily_totals[d_str] = daily_totals.get(d_str, 0) + row.count
-        if row.status == CheckinStatus.approved:
-            daily_approved[d_str] = daily_approved.get(d_str, 0) + row.count
-
-    checkins_by_day = []
-    attendance_rate_by_day = []
-
-    for i in range(days - 1, -1, -1):
-        day_date = (now - timedelta(days=i)).date()
-        date_str = day_date.strftime("%Y-%m-%d")
-        total_d = daily_totals.get(date_str, 0)
-        approved_d = daily_approved.get(date_str, 0)
-        checkins_by_day.append(DailyCheckinTrend(date=date_str, count=total_d))
-        rate = round(approved_d / total_d, 2) if total_d > 0 else 0.0
-        attendance_rate_by_day.append(DailyAttendanceRateTrend(date=date_str, rate=rate))
-
-    return StatsOverviewResponse(
-        total_sessions=total_sessions,
-        active_sessions=active_sessions,
-        total_checkins_today=total_checkins_today,
-        total_checkins_week=total_checkins_week,
-        average_attendance_rate=average_attendance_rate,
-        flagged_pending_review=flagged_pending_review,
-        approval_rate=approval_rate,
-        average_risk_score=average_risk_score,
-        high_risk_checkins_today=high_risk_count,
-        trends=TrendsData(
-            checkins_by_day=checkins_by_day,
-            attendance_rate_by_day=attendance_rate_by_day
-        )
-    )
-
-# 2. GET /stats/sessions/{session_id}
-@router.get("/sessions/{session_id}", response_model=SessionStatsResponse, status_code=status.HTTP_200_OK)
-def get_session_stats(
-    session_id: uuid.UUID,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.get("role") not in ["instructor", "ta", "admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Instructor or TA permissions required."
-        )
-
-    session_obj = db.query(SessionModel).filter(SessionModel.id == session_id).first()
-    if not session_obj:
+def _get_session(db: Session, session_id: str) -> SessionModel:
+    session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session with ID '{session_id}' not found."
+            detail=f"Session with ID '{session_id}' not found.",
+        )
+    return session
+
+
+def _get_course(db: Session, course_id: str) -> CourseModel:
+    course = db.query(CourseModel).filter(CourseModel.id == course_id).first()
+    if course is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Course with ID '{course_id}' not found.",
+        )
+    return course
+
+
+def _active_enrollment_count(db: Session, course_id: str) -> int:
+    return (
+        db.query(func.count(EnrollmentModel.id))
+        .filter(
+            EnrollmentModel.course_id == course_id,
+            EnrollmentModel.is_active.is_(True),
+        )
+        .scalar()
+        or 0
+    )
+
+
+@router.get("/overview")
+def stats_overview(
+    course_id: Optional[str] = None,
+    days: int = Query(7, ge=1, le=365),
+    user: Dict[str, Any] = Depends(INSTRUCTOR_OR_ADMIN),
+    db: Session = Depends(get_db),
+):
+    scoped_course_ids = _scoped_course_ids(db, user)
+    if course_id:
+        _get_course(db, course_id)
+        if user.get("role") != "admin":
+            require_course_staff_access(db, user, course_id)
+        scoped_course_ids = [course_id]
+
+    sessions_query = db.query(SessionModel)
+    courses_query = db.query(CourseModel)
+    checkins_query = db.query(CheckinModel).join(
+        SessionModel, CheckinModel.session_id == SessionModel.id
+    )
+    if scoped_course_ids is not None:
+        sessions_query = sessions_query.filter(SessionModel.course_id.in_(scoped_course_ids))
+        courses_query = courses_query.filter(CourseModel.id.in_(scoped_course_ids))
+        checkins_query = checkins_query.filter(SessionModel.course_id.in_(scoped_course_ids))
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=6)
+    trend_start = today_start - timedelta(days=days - 1)
+
+    total_sessions = sessions_query.count()
+    active_sessions = sessions_query.filter(SessionModel.status == "active").count()
+    total_courses = courses_query.count()
+    if scoped_course_ids is None:
+        total_students = db.query(UserModel).filter(UserModel.role == "student").count()
+    else:
+        total_students = (
+            db.query(func.count(func.distinct(EnrollmentModel.student_id)))
+            .filter(
+                EnrollmentModel.course_id.in_(scoped_course_ids),
+                EnrollmentModel.is_active.is_(True),
+            )
+            .scalar()
+            or 0
         )
 
-    checkins = db.query(Checkin).filter(Checkin.session_id == session_id).all()
-    checked_in_count = len(checkins)
+    checkins_today_query = checkins_query.filter(CheckinModel.checked_in_at >= today_start)
+    checkins_week_query = checkins_query.filter(CheckinModel.checked_in_at >= week_start)
+    total_checkins_today = checkins_today_query.count()
+    total_checkins_week = checkins_week_query.count()
+    total_checkins = checkins_query.count()
+    approved_checkins = checkins_query.filter(CheckinModel.status == "approved").count()
+    flagged_pending = checkins_query.filter(
+        CheckinModel.status.in_(["flagged", "appealed"])
+    ).count()
+    average_risk_score = (
+        checkins_query.with_entities(func.avg(CheckinModel.risk_score)).scalar() or 0.0
+    )
+    high_risk_today = checkins_today_query.filter(CheckinModel.risk_score >= 0.5).count()
 
-    by_status = ByStatus(
-        approved=sum(1 for c in checkins if c.status == CheckinStatus.approved),
-        flagged=sum(1 for c in checkins if c.status == CheckinStatus.flagged),
-        rejected=sum(1 for c in checkins if c.status == CheckinStatus.rejected),
-        pending=sum(1 for c in checkins if c.status == CheckinStatus.pending)
+    enrollment_counts = dict(
+        db.query(EnrollmentModel.course_id, func.count(EnrollmentModel.id))
+        .filter(
+            EnrollmentModel.is_active.is_(True),
+            *(
+                [EnrollmentModel.course_id.in_(scoped_course_ids)]
+                if scoped_course_ids is not None
+                else []
+            ),
+        )
+        .group_by(EnrollmentModel.course_id)
+        .all()
+    )
+    session_counts = dict(
+        db.query(SessionModel.course_id, func.count(SessionModel.id))
+        .filter(
+            *(
+                [SessionModel.course_id.in_(scoped_course_ids)]
+                if scoped_course_ids is not None
+                else []
+            )
+        )
+        .group_by(SessionModel.course_id)
+        .all()
+    )
+    attendance_opportunities = sum(
+        enrollment_counts.get(cid, 0) * count
+        for cid, count in session_counts.items()
+    )
+    attendance_rate = (
+        round(approved_checkins / attendance_opportunities, 2)
+        if attendance_opportunities
+        else 0.0
     )
 
-    risk_dist = RiskDistribution(
-        low=sum(1 for c in checkins if c.risk_score < 0.3),
-        medium=sum(1 for c in checkins if 0.3 <= c.risk_score < 0.5),
-        high=sum(1 for c in checkins if c.risk_score >= 0.5)
+    daily_rows = (
+        checkins_query.filter(CheckinModel.checked_in_at >= trend_start)
+        .with_entities(
+            func.date(CheckinModel.checked_in_at),
+            CheckinModel.status,
+            func.count(CheckinModel.id),
+        )
+        .group_by(func.date(CheckinModel.checked_in_at), CheckinModel.status)
+        .all()
     )
+    daily_totals: dict[str, int] = {}
+    daily_approved: dict[str, int] = {}
+    for day, checkin_status, count in daily_rows:
+        day_key = day.isoformat() if hasattr(day, "isoformat") else str(day)
+        daily_totals[day_key] = daily_totals.get(day_key, 0) + count
+        if checkin_status == "approved":
+            daily_approved[day_key] = daily_approved.get(day_key, 0) + count
 
-    avg_risk = sum(c.risk_score for c in checkins) / checked_in_count if checked_in_count > 0 else 0.0
-    valid_distances = [c.distance_from_venue_meters for c in checkins if c.distance_from_venue_meters is not None]
-    avg_distance = sum(valid_distances) / len(valid_distances) if valid_distances else 0.0
+    trends = [
+        {
+            "date": (today_start - timedelta(days=delta)).date().isoformat(),
+            "count": daily_totals.get(
+                (today_start - timedelta(days=delta)).date().isoformat(), 0
+            ),
+            "rate": (
+                round(
+                    daily_approved.get(
+                        (today_start - timedelta(days=delta)).date().isoformat(), 0
+                    )
+                    / daily_totals[
+                        (today_start - timedelta(days=delta)).date().isoformat()
+                    ],
+                    2,
+                )
+                if daily_totals.get(
+                    (today_start - timedelta(days=delta)).date().isoformat(), 0
+                )
+                else 0.0
+            ),
+        }
+        for delta in range(days - 1, -1, -1)
+    ]
 
-    total_enrolled = db.query(Enrollment).filter(Enrollment.course_id == session_obj.course_id).count() or 50
-    attendance_rate = round(by_status.approved / total_enrolled, 2) if total_enrolled > 0 else 0.0
+    approval_rate = round(approved_checkins / total_checkins, 2) if total_checkins else 0.0
+    return {
+        "total_sessions": total_sessions,
+        "active_sessions": active_sessions,
+        "total_courses": total_courses,
+        "total_students": total_students,
+        "today_checkins": total_checkins_today,
+        "flagged_pending": flagged_pending,
+        "approval_rate": approval_rate,
+        "total_checkins_today": total_checkins_today,
+        "total_checkins_week": total_checkins_week,
+        "average_attendance_rate": attendance_rate,
+        "flagged_pending_review": flagged_pending,
+        "average_risk_score": round(float(average_risk_score), 2),
+        "high_risk_checkins_today": high_risk_today,
+        "trends": {
+            "checkins_by_day": [
+                {"date": row["date"], "count": row["count"]} for row in trends
+            ],
+            "attendance_rate_by_day": [
+                {"date": row["date"], "rate": row["rate"]} for row in trends
+            ],
+        },
+    }
 
-    timeline_buckets: Dict[int, int] = {}
-    time_deltas = []
-    scheduled_start = session_obj.scheduled_start
+
+@router.get("/sessions/{session_id}")
+def stats_session(
+    session_id: str,
+    user: Dict[str, Any] = Depends(STAFF),
+    db: Session = Depends(get_db),
+):
+    session = _get_session(db, session_id)
+    if user.get("role") != "admin":
+        require_course_staff_access(db, user, session.course_id)
+
+    checkins = db.query(CheckinModel).filter(CheckinModel.session_id == session_id).all()
+    status_counts = {
+        value: sum(1 for checkin in checkins if checkin.status == value)
+        for value in ("approved", "flagged", "rejected", "pending", "appealed")
+    }
+    enrolled = _active_enrollment_count(db, session.course_id)
+    approved = status_counts["approved"]
+    valid_distances = [
+        checkin.distance_from_venue_meters
+        for checkin in checkins
+        if checkin.distance_from_venue_meters is not None
+    ]
+    average_risk = (
+        sum(checkin.risk_score or 0.0 for checkin in checkins) / len(checkins)
+        if checkins
+        else 0.0
+    )
+    timeline_counts: dict[int, int] = {}
+    checkin_minutes = []
+    scheduled_start = session.scheduled_start
     if scheduled_start.tzinfo is None:
         scheduled_start = scheduled_start.replace(tzinfo=timezone.utc)
-
-    for c in checkins:
-        c_time = c.checked_in_at
-        if c_time.tzinfo is None:
-            c_time = c_time.replace(tzinfo=timezone.utc)
-        delta_minutes = max(0.0, (c_time - scheduled_start).total_seconds() / 60.0)
-        time_deltas.append(delta_minutes)
-        bucket_minute = int(delta_minutes // 5) * 5
-        timeline_buckets[bucket_minute] = timeline_buckets.get(bucket_minute, 0) + 1
-
-    avg_checkin_time = sum(time_deltas) / len(time_deltas) if time_deltas else 0.0
-
-    checkin_timeline = [
-        CheckinTimelineBucket(minute=m, count=timeline_buckets[m])
-        for m in sorted(timeline_buckets.keys())
-    ]
-
-    return SessionStatsResponse(
-        session_id=session_obj.id,
-        session_name=session_obj.name,
-        course_code=session_obj.course.code if session_obj.course else "",
-        scheduled_start=session_obj.scheduled_start,
-        status=session_obj.status,
-        total_enrolled=total_enrolled,
-        checked_in=checked_in_count,
-        attendance_rate=attendance_rate,
-        by_status=by_status,
-        average_risk_score=round(avg_risk, 2),
-        average_distance_meters=round(avg_distance, 1),
-        average_checkin_time_minutes=round(avg_checkin_time, 1),
-        risk_distribution=risk_dist,
-        checkin_timeline=checkin_timeline
-    )
-
-# 3. GET /stats/courses/{course_id}
-@router.get("/courses/{course_id}", response_model=CourseStatsResponse, status_code=status.HTTP_200_OK)
-def get_course_stats(
-    course_id: uuid.UUID,
-    start_date: Optional[datetime] = Query(None, description="Start date (ISO8601)"),
-    end_date: Optional[datetime] = Query(None, description="End date (ISO8601)"),
-    current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.get("role") not in ["instructor", "admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Instructor or admin permissions required."
-        )
-
-    course_obj = db.query(Course).filter(Course.id == course_id).first()
-    if not course_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Course with ID '{course_id}' not found."
-        )
-
-    session_query = db.query(SessionModel).filter(SessionModel.course_id == course_id)
-    if start_date:
-        session_query = session_query.filter(SessionModel.scheduled_start >= start_date)
-    if end_date:
-        session_query = session_query.filter(SessionModel.scheduled_start <= end_date)
-
-    course_sessions = session_query.order_by(SessionModel.scheduled_start.asc()).all()
-    total_sessions_count = len(course_sessions)
-    session_ids = [s.id for s in course_sessions]
-
-    total_enrolled = db.query(Enrollment).filter(Enrollment.course_id == course_id).count() or 50
-
-    session_summaries: List[SessionAttendanceSummary] = []
-    total_approved_checkins = 0
-
-    if session_ids:
-        all_checkins = db.query(Checkin).filter(Checkin.session_id.in_(session_ids)).all()
-        checkins_by_session: Dict[uuid.UUID, List[Checkin]] = {}
-        for c in all_checkins:
-            checkins_by_session.setdefault(c.session_id, []).append(c)
-
-        for sess in course_sessions:
-            s_checkins = checkins_by_session.get(sess.id, [])
-            approved_cnt = sum(1 for c in s_checkins if c.status == CheckinStatus.approved)
-            total_approved_checkins += approved_cnt
-            sess_rate = round(approved_cnt / total_enrolled, 2) if total_enrolled > 0 else 0.0
-
-            session_summaries.append(
-                SessionAttendanceSummary(
-                    session_id=sess.id,
-                    name=sess.name,
-                    date=sess.scheduled_start.strftime("%Y-%m-%d"),
-                    attendance_rate=sess_rate,
-                    checked_in=approved_cnt
-                )
-            )
-    else:
-        all_checkins = []
-
-    total_possible_attendances = total_sessions_count * total_enrolled
-    overall_attendance_rate = (
-        round(total_approved_checkins / total_possible_attendances, 2)
-        if total_possible_attendances > 0 else 0.0
-    )
-
-    enrollments = db.query(Enrollment).filter(Enrollment.course_id == course_id).all()
-    student_attendance_list: List[StudentAttendanceSummary] = []
-    low_attendance_alerts: List[LowAttendanceAlert] = []
-
-    checkins_by_student: Dict[uuid.UUID, List[Checkin]] = {}
-    for c in all_checkins:
-        checkins_by_student.setdefault(c.student_id, []).append(c)
-
-    for enr in enrollments:
-        if not enr.student:
+    for checkin in checkins:
+        checked_in_at = checkin.checked_in_at
+        if checked_in_at is None:
             continue
-        st = enr.student
-        st_checkins = checkins_by_student.get(st.id, [])
-        attended_cnt = sum(1 for c in st_checkins if c.status == CheckinStatus.approved)
-        st_rate = round(attended_cnt / total_sessions_count, 2) if total_sessions_count > 0 else 0.0
-        avg_risk = sum(c.risk_score for c in st_checkins) / len(st_checkins) if st_checkins else 0.0
-
-        student_attendance_list.append(
-            StudentAttendanceSummary(
-                student_id=st.id,
-                student_name=st.full_name,
-                sessions_attended=attended_cnt,
-                attendance_rate=st_rate,
-                average_risk_score=round(avg_risk, 2)
-            )
+        if checked_in_at.tzinfo is None:
+            checked_in_at = checked_in_at.replace(tzinfo=timezone.utc)
+        minutes = max(
+            0.0, (checked_in_at - scheduled_start).total_seconds() / 60.0
         )
+        checkin_minutes.append(minutes)
+        bucket = int(minutes // 5) * 5
+        timeline_counts[bucket] = timeline_counts.get(bucket, 0) + 1
+    course = db.query(CourseModel).filter(CourseModel.id == session.course_id).first()
+    return {
+        "session_id": session.id,
+        "session_name": session.name,
+        "course_code": course.code if course else "",
+        "scheduled_start": session.scheduled_start,
+        "status": session.status,
+        "total_enrolled": enrolled,
+        "checked_in": len(checkins),
+        "checked_in_count": len(checkins),
+        "approved_count": approved,
+        "flagged_count": status_counts["flagged"] + status_counts["appealed"],
+        "attendance_rate": round(approved / enrolled, 2) if enrolled else 0.0,
+        "by_status": status_counts,
+        "average_risk_score": round(average_risk, 2),
+        "average_distance_meters": round(
+            sum(valid_distances) / len(valid_distances), 1
+        )
+        if valid_distances
+        else 0.0,
+        "average_checkin_time_minutes": round(
+            sum(checkin_minutes) / len(checkin_minutes), 1
+        )
+        if checkin_minutes
+        else 0.0,
+        "risk_distribution": {
+            "low": sum(1 for item in checkins if item.risk_score < 0.3),
+            "medium": sum(1 for item in checkins if 0.3 <= item.risk_score < 0.5),
+            "high": sum(1 for item in checkins if item.risk_score >= 0.5),
+        },
+        "checkin_timeline": [
+            {"minute": minute, "count": timeline_counts[minute]}
+            for minute in sorted(timeline_counts)
+        ],
+    }
 
-        if st_rate <= 0.70 and total_sessions_count > 0:
-            low_attendance_alerts.append(
-                LowAttendanceAlert(
-                    student_id=st.id,
-                    student_name=st.full_name,
-                    attendance_rate=st_rate,
-                    sessions_missed=total_sessions_count - attended_cnt
-                )
-            )
 
-    return CourseStatsResponse(
-        course_id=course_obj.id,
-        course_code=course_obj.code,
-        course_name=course_obj.name,
-        total_sessions=total_sessions_count,
-        total_enrolled=total_enrolled,
-        overall_attendance_rate=overall_attendance_rate,
-        sessions=session_summaries,
-        student_attendance=student_attendance_list,
-        low_attendance_alerts=low_attendance_alerts
-    )
-
-# 4. GET /stats/students/{student_id}
-@router.get("/students/{student_id}", response_model=StudentStatsResponse, status_code=status.HTTP_200_OK)
-def get_student_stats(
-    student_id: uuid.UUID,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
+@router.get("/courses/{course_id}")
+def stats_course(
+    course_id: str,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    user: Dict[str, Any] = Depends(INSTRUCTOR_OR_ADMIN),
+    db: Session = Depends(get_db),
 ):
-    if current_user.get("role") not in ["instructor", "admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Instructor or admin permissions required."
+    course = _get_course(db, course_id)
+    if user.get("role") != "admin":
+        require_course_staff_access(db, user, course_id)
+
+    sessions_query = db.query(SessionModel).filter(SessionModel.course_id == course_id)
+    if start_date:
+        sessions_query = sessions_query.filter(SessionModel.scheduled_start >= start_date)
+    if end_date:
+        sessions_query = sessions_query.filter(SessionModel.scheduled_start <= end_date)
+    sessions = sessions_query.order_by(SessionModel.scheduled_start.asc()).all()
+    enrollments = (
+        db.query(EnrollmentModel, UserModel)
+        .join(UserModel, EnrollmentModel.student_id == UserModel.id)
+        .filter(
+            EnrollmentModel.course_id == course_id,
+            EnrollmentModel.is_active.is_(True),
         )
-
-    student = db.query(User).filter(User.id == student_id).first()
-    if not student:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Student with ID '{student_id}' not found."
-        )
-
-    enrollments = db.query(Enrollment).filter(Enrollment.student_id == student_id).all()
-    enrolled_courses = [e.course for e in enrollments if e.course]
-
-    all_checkins = (
-        db.query(Checkin)
-        .join(Checkin.session)
-        .filter(Checkin.student_id == student_id)
-        .order_by(Checkin.checked_in_at.desc())
         .all()
     )
-
-    checkins_by_course: Dict[uuid.UUID, List[Checkin]] = {}
-    for c in all_checkins:
-        checkins_by_course.setdefault(c.session.course_id, []).append(c)
-
-    courses_stats: List[StudentCourseStats] = []
-
-    for course in enrolled_courses:
-        c_checkins = checkins_by_course.get(course.id, [])
-        total_sessions = db.query(SessionModel).filter(SessionModel.course_id == course.id).count()
-        sessions_attended = sum(1 for c in c_checkins if c.status == CheckinStatus.approved)
-        attendance_rate = round(sessions_attended / total_sessions, 2) if total_sessions > 0 else 0.0
-        avg_risk = sum(c.risk_score for c in c_checkins) / len(c_checkins) if c_checkins else 0.0
-
-        courses_stats.append(
-            StudentCourseStats(
-                course_id=course.id,
-                course_code=course.code,
-                attendance_rate=attendance_rate,
-                sessions_attended=sessions_attended,
-                total_sessions=total_sessions,
-                average_risk_score=round(avg_risk, 2)
-            )
-        )
-
-    recent_checkins = [
-        StudentRecentCheckin(
-            session_name=c.session.name if c.session else "",
-            course_code=c.session.course.code if c.session and c.session.course else "",
-            checked_in_at=c.checked_in_at,
-            status=c.status
-        )
-        for c in all_checkins[:10]
-    ]
-
-    return StudentStatsResponse(
-        student_id=student.id,
-        student_name=student.full_name,
-        student_email=student.email,
-        courses=courses_stats,
-        recent_checkins=recent_checkins
+    session_ids = [session.id for session in sessions]
+    checkins = (
+        db.query(CheckinModel)
+        .filter(CheckinModel.session_id.in_(session_ids))
+        .all()
+        if session_ids
+        else []
     )
+    by_session: dict[str, list[CheckinModel]] = {}
+    by_student: dict[str, list[CheckinModel]] = {}
+    for checkin in checkins:
+        by_session.setdefault(checkin.session_id, []).append(checkin)
+        by_student.setdefault(checkin.student_id, []).append(checkin)
+
+    enrolled_count = len(enrollments)
+    session_rows = []
+    approved_total = 0
+    for session in sessions:
+        session_checkins = by_session.get(session.id, [])
+        approved = sum(1 for item in session_checkins if item.status == "approved")
+        approved_total += approved
+        session_rows.append(
+            {
+                "session_id": session.id,
+                "name": session.name,
+                "date": session.scheduled_start.date().isoformat(),
+                "attendance_rate": round(approved / enrolled_count, 2)
+                if enrolled_count
+                else 0.0,
+                "checked_in": approved,
+            }
+        )
+
+    student_rows = []
+    low_attendance = []
+    for _, student in enrollments:
+        student_checkins = by_student.get(student.id, [])
+        attended = len(
+            {
+                item.session_id
+                for item in student_checkins
+                if item.status == "approved"
+            }
+        )
+        rate = round(attended / len(sessions), 2) if sessions else 0.0
+        risk_average = (
+            sum(item.risk_score or 0.0 for item in student_checkins)
+            / len(student_checkins)
+            if student_checkins
+            else 0.0
+        )
+        student_rows.append(
+            {
+                "student_id": student.id,
+                "student_name": student.full_name,
+                "sessions_attended": attended,
+                "attendance_rate": rate,
+                "average_risk_score": round(risk_average, 2),
+            }
+        )
+        if sessions and rate <= 0.7:
+            low_attendance.append(
+                {
+                    "student_id": student.id,
+                    "student_name": student.full_name,
+                    "attendance_rate": rate,
+                    "sessions_missed": len(sessions) - attended,
+                }
+            )
+
+    attendance_opportunities = len(sessions) * enrolled_count
+    return {
+        "course_id": course.id,
+        "course_code": course.code,
+        "course_name": course.name,
+        "total_enrolled": enrolled_count,
+        "total_sessions": len(sessions),
+        "average_attendance_rate": round(approved_total / attendance_opportunities, 2)
+        if attendance_opportunities
+        else 0.0,
+        "overall_attendance_rate": round(approved_total / attendance_opportunities, 2)
+        if attendance_opportunities
+        else 0.0,
+        "flagged_checkins": sum(
+            1 for checkin in checkins if checkin.status in {"flagged", "appealed"}
+        ),
+        "sessions": session_rows,
+        "student_attendance": student_rows,
+        "low_attendance_alerts": low_attendance,
+    }
+
+
+@router.get("/students/{student_id}")
+def stats_student(
+    student_id: str,
+    user: Dict[str, Any] = Depends(INSTRUCTOR_OR_ADMIN),
+    db: Session = Depends(get_db),
+):
+    student = (
+        db.query(UserModel)
+        .filter(UserModel.id == student_id, UserModel.role == "student")
+        .first()
+    )
+    if student is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Student with ID '{student_id}' not found.",
+        )
+
+    enrollments = (
+        db.query(EnrollmentModel)
+        .filter(
+            EnrollmentModel.student_id == student_id,
+            EnrollmentModel.is_active.is_(True),
+        )
+        .all()
+    )
+    course_ids = [enrollment.course_id for enrollment in enrollments]
+    if user.get("role") != "admin" and not set(course_ids).intersection(
+        staff_course_ids(db, user)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Student is not enrolled in your courses.",
+        )
+
+    sessions = (
+        db.query(SessionModel)
+        .filter(SessionModel.course_id.in_(course_ids))
+        .all()
+        if course_ids
+        else []
+    )
+    checkins = (
+        db.query(CheckinModel, SessionModel, CourseModel)
+        .join(SessionModel, CheckinModel.session_id == SessionModel.id)
+        .join(CourseModel, SessionModel.course_id == CourseModel.id)
+        .filter(
+            CheckinModel.student_id == student_id,
+            SessionModel.course_id.in_(course_ids),
+        )
+        .order_by(CheckinModel.checked_in_at.desc())
+        .all()
+        if course_ids
+        else []
+    )
+    attended = {row[1].id for row in checkins if row[0].status == "approved"}
+    course_by_id = (
+        {
+            course.id: course
+            for course in db.query(CourseModel)
+            .filter(CourseModel.id.in_(course_ids))
+            .all()
+        }
+        if course_ids
+        else {}
+    )
+    checkin_rows = [
+        {
+            "session_name": session.name,
+            "course_code": course.code,
+            "checked_in_at": checkin.checked_in_at,
+            "status": checkin.status,
+        }
+        for checkin, session, course in checkins[:10]
+        if session.course_id in course_by_id
+    ]
+    course_rows = []
+    for course_id in course_ids:
+        course = course_by_id.get(course_id)
+        if course is None:
+            continue
+        course_sessions = [
+            session for session in sessions if session.course_id == course_id
+        ]
+        course_checkins = [
+            checkin
+            for checkin, session, _ in checkins
+            if session.course_id == course_id
+        ]
+        attended_count = len(
+            {
+                checkin.session_id
+                for checkin in course_checkins
+                if checkin.status == "approved"
+            }
+        )
+        course_rows.append(
+            {
+                "course_id": course.id,
+                "course_code": course.code,
+                "attendance_rate": round(attended_count / len(course_sessions), 2)
+                if course_sessions
+                else 0.0,
+                "sessions_attended": attended_count,
+                "total_sessions": len(course_sessions),
+                "average_risk_score": round(
+                    sum(item.risk_score or 0.0 for item in course_checkins)
+                    / len(course_checkins),
+                    2,
+                )
+                if course_checkins
+                else 0.0,
+            }
+        )
+    return {
+        "student_id": student.id,
+        "student_name": student.full_name,
+        "student_email": student.email,
+        "total_enrolled_courses": len(enrollments),
+        "total_sessions": len(sessions),
+        "attended_sessions": len(attended),
+        "attendance_rate": round(len(attended) / len(sessions), 2) if sessions else 0.0,
+        "courses": course_rows,
+        "recent_checkins": checkin_rows,
+        "recent_sessions": checkin_rows,
+    }

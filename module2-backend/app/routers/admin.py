@@ -150,9 +150,18 @@ def bulk_create_users(
     created_users = []
     
     # Pre-check for duplicate emails within payload or DB
-    emails = [u.email for u in users_data]
+    emails = [str(user.email).strip().lower() for user in users_data]
+    if len(set(emails)) != len(emails):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The bulk request contains duplicate email addresses."
+        )
+
     existing_emails = {
-        u.email for u in db.query(User.email).filter(User.email.in_(emails)).all()
+        email
+        for (email,) in db.query(func.lower(User.email))
+        .filter(func.lower(User.email).in_(emails))
+        .all()
     }
     
     if existing_emails:
@@ -164,7 +173,7 @@ def bulk_create_users(
     for data in users_data:
         user = User(
             id=str(uuid.uuid4()),
-            email=data.email,
+            email=str(data.email).strip().lower(),
             full_name=data.full_name,
             hashed_password=hash_password(data.password),
             role=data.role,

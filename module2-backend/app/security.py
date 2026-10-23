@@ -9,8 +9,10 @@ from typing import Any, Dict, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+from sqlalchemy.orm import Session
 
-from .store import get_by_id, public_user
+from .database import get_db
+from .models import UserModel
 
 SECRET_KEY = os.getenv("SECRET_KEY", "saiv-dev-secret-change-me")
 ALGORITHM = "HS256"
@@ -66,6 +68,7 @@ def decode_token(token: str, expected_type: Optional[str] = None) -> Dict[str, A
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     if credentials is None or not credentials.credentials:
         raise HTTPException(
@@ -73,29 +76,41 @@ async def get_current_user(
             detail="Not authenticated",
         )
     payload = decode_token(credentials.credentials, expected_type="access")
-    user = get_by_id(payload.get("sub", ""))
+    user = (
+        db.query(UserModel)
+        .filter(UserModel.id == payload.get("sub", ""))
+        .first()
+    )
     if user is None:
-        # Stub tokens may refer to ephemeral users created at login time
-        user = {
-            "id": payload.get("sub"),
-            "email": payload.get("email"),
-            "full_name": payload.get("email", "User").split("@")[0],
-            "role": payload.get("role", "student"),
-            "is_active": True,
-            "camera_consent": False,
-            "geolocation_consent": False,
-            "face_enrolled": False,
-            "created_at": datetime.now(timezone.utc)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z"),
-        }
-    if not user.get("is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User no longer exists",
+        )
+    if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account disabled",
         )
-    return user
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "is_active": user.is_active,
+        "camera_consent": user.camera_consent,
+        "geolocation_consent": user.geolocation_consent,
+        "face_enrolled": user.face_enrolled,
+        "created_at": user.created_at,
+    }
+
+
+async def get_optional_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> Optional[Dict[str, Any]]:
+    if credentials is None:
+        return None
+    return await get_current_user(credentials, db)
 
 
 def require_roles(*roles: str):
