@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -9,7 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import AuditLogModel, SessionModel
+from ..models import AuditLogModel, CheckinModel, DeviceModel, SessionModel, UserModel
 from ..security import require_roles
 from ..course_access import require_course_staff_access
 
@@ -30,7 +31,31 @@ async def session_checkins(
         )
     if _user.get("role") in {"instructor", "ta"}:
         require_course_staff_access(db, _user, session.course_id)
-    return []
+
+    checkins = (
+        db.query(CheckinModel, UserModel, DeviceModel)
+        .join(UserModel, CheckinModel.student_id == UserModel.id)
+        .outerjoin(DeviceModel, CheckinModel.device_id == DeviceModel.id)
+        .filter(CheckinModel.session_id == session_id)
+        .order_by(CheckinModel.checked_in_at.asc())
+        .all()
+    )
+    return [
+        {
+            "id": checkin.id,
+            "student_id": checkin.student_id,
+            "student_name": student.full_name,
+            "student_email": student.email,
+            "status": checkin.status,
+            "checked_in_at": checkin.checked_in_at,
+            "distance_from_venue_meters": checkin.distance_from_venue_meters,
+            "risk_score": checkin.risk_score,
+            "risk_factors": json.loads(checkin.risk_factors) if checkin.risk_factors else [],
+            "liveness_passed": checkin.liveness_passed,
+            "device_trusted": bool(device and device.is_trusted),
+        }
+        for checkin, student, device in checkins
+    ]
 
 
 @router.get("/audit/summary")

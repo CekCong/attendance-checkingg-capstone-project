@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..security import get_current_user
 from ..rate_limit import client_ip
 from ..database import get_db as shared_get_db
-from ..models import CheckinModel, DeviceModel, SessionModel, UserModel as User
+from ..models import CheckinModel, DeviceModel, EnrollmentModel, SessionModel, UserModel as User
 from ..audit import add_audit_log
 from ..course_access import require_course_staff_access, staff_course_ids
 from ..services.face_client import (
@@ -523,6 +523,21 @@ async def create_checkin(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session with ID '{payload.session_id}' not found."
+        )
+
+    enrollment = (
+        db.query(EnrollmentModel)
+        .filter(
+            EnrollmentModel.student_id == student_id,
+            EnrollmentModel.course_id == session_obj.course_id,
+            EnrollmentModel.is_active.is_(True),
+        )
+        .first()
+    )
+    if not enrollment:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not actively enrolled in this course.",
         )
 
     if session_obj.status != SessionStatus.active:

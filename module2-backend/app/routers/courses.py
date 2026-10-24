@@ -292,6 +292,7 @@ def get_course_details(
         id=course.id,
         code=course.code,
         name=course.name,
+        description=course.description,
         semester=course.semester,
         instructor_id=inst_id,
         instructor_name=inst_name,
@@ -299,6 +300,8 @@ def get_course_details(
         venue_latitude=course.venue_latitude,
         venue_longitude=course.venue_longitude,
         geofence_radius_meters=course.geofence_radius_meters,
+        require_face_recognition=course.require_face_recognition,
+        require_device_binding=course.require_device_binding,
         risk_threshold=course.risk_threshold,
         is_active=course.is_active,
         created_at=course.created_at,
@@ -368,6 +371,7 @@ def update_course_full_or_partial(
             id=course.id,
             code=course.code,
             name=course.name,
+            description=course.description,
             semester=course.semester,
             instructor_id=inst_id,
             instructor_name=inst_name,
@@ -375,9 +379,12 @@ def update_course_full_or_partial(
             venue_latitude=course.venue_latitude,
             venue_longitude=course.venue_longitude,
             geofence_radius_meters=course.geofence_radius_meters,
+            require_face_recognition=course.require_face_recognition,
+            require_device_binding=course.require_device_binding,
             risk_threshold=course.risk_threshold,
             is_active=course.is_active,
-            created_at=course.created_at
+            created_at=course.created_at,
+            updated_at=course.updated_at,
         )
     except Exception as e:
         db.rollback()
