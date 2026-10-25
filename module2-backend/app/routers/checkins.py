@@ -525,6 +525,11 @@ async def create_checkin(
             detail=f"Session with ID '{payload.session_id}' not found."
         )
 
+    face_match_required = bool(
+        session_obj.require_face_match
+        or (session_obj.course and session_obj.course.require_face_recognition)
+    )
+
     enrollment = (
         db.query(EnrollmentModel)
         .filter(
@@ -670,7 +675,7 @@ async def create_checkin(
         risk_factors.append({"type": "liveness_failed", "severity": "high", "weight": 1.0})
         local_risk = 1.0
 
-    if session_obj.require_face_match:
+    if face_match_required:
         if not payload.liveness_challenge_response:
             face_match_passed = False
             face_match_score = 0.0
@@ -718,7 +723,7 @@ async def create_checkin(
                 face_match_score=(
                     face_match_score
                     if face_match_score is not None
-                    else (0.0 if session_obj.require_face_match else 1.0)
+                    else (0.0 if face_match_required else 1.0)
                 ),
                 device_public_key=device.public_key if device else None,
                 ip_address=client_ip(request),
@@ -767,11 +772,8 @@ async def create_checkin(
     total_risk = round(min(max(local_risk, module3_risk), 1.0), 4)
 
     verification_failed = (
-        bool(payload.liveness_challenge_response)
-        and (
-            (session_obj.require_liveness_check and liveness_passed is False)
-            or (session_obj.require_face_match and face_match_passed is False)
-        )
+        (session_obj.require_liveness_check and liveness_passed is False)
+        or (face_match_required and face_match_passed is False)
     )
 
     if geofence_exceeded_critical or outside_singapore_ip or verification_failed:

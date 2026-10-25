@@ -230,7 +230,7 @@ def create_course(
     db.add(course)
 
     try:
-        db.commit()
+        db.flush()
         db.refresh(course)
 
         # If an instructor was provided, optionally create a default session linking them
@@ -247,7 +247,9 @@ def create_course(
                 status="scheduled"
             )
             db.add(default_session)
-            db.commit()
+
+        db.commit()
+        db.refresh(course)
 
         return course
     except Exception as e:
