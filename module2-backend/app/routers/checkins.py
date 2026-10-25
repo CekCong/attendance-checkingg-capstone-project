@@ -13,6 +13,7 @@ from ..database import get_db as shared_get_db
 from ..models import CheckinModel, DeviceModel, EnrollmentModel, SessionModel, UserModel as User
 from ..audit import add_audit_log
 from ..course_access import require_course_staff_access, staff_course_ids
+from ..retention import CHECKIN_RETENTION_DAYS
 from ..services.face_client import (
     FaceServiceError,
     assess_risk,
@@ -324,6 +325,7 @@ def get_checkin_detail(
 def appeal_checkin(
     id: uuid.UUID,
     payload: AppealCreate,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -375,6 +377,11 @@ def appeal_checkin(
     record.appeal_reason = payload.appeal_reason
     record.appealed_at = now
 
+    add_audit_log(
+        db, request, "checkin_appealed",
+        user_id=student_id, resource_type="checkin", resource_id=record.id,
+        details=f"session_id={record.session_id}",
+    )
     db.commit()
     db.refresh(record)
 
@@ -385,6 +392,7 @@ def appeal_checkin(
 def review_checkin(
     id: uuid.UUID,
     payload: ReviewCreate,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -416,6 +424,21 @@ def review_checkin(
     record.reviewed_at = now
     record.review_notes = payload.review_notes
 
+    add_audit_log(
+        db, request, "checkin_reviewed",
+        user_id=reviewer_id, resource_type="checkin", resource_id=record.id,
+        details=f"status={payload.status.value}",
+    )
+    add_audit_log(
+        db,
+        request,
+        "checkin_approved" if payload.status == ReviewStatus.approved else "checkin_rejected",
+        user_id=reviewer_id,
+        resource_type="checkin",
+        resource_id=record.id,
+        details=f"manual_review=true; student_id={record.student_id}",
+        success=payload.status == ReviewStatus.approved,
+    )
     db.commit()
     db.refresh(record)
 
@@ -566,6 +589,13 @@ async def create_checkin(
         )
 
     if not (1.15 <= payload.latitude <= 1.4833 and 103.60 <= payload.longitude <= 104.4167):
+        add_audit_log(
+            db, request, "security_violation",
+            user_id=student_id, resource_type="session", resource_id=session_id,
+            details="Check-in GPS coordinates outside Singapore",
+            success=False,
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Check-ins are only allowed within Singapore."
@@ -807,6 +837,7 @@ async def create_checkin(
         risk_score=total_risk,
         risk_factors=json.dumps(risk_factors),
         qr_code_verified=bool(session_obj.qr_code_secret),
+        scheduled_deletion_at=now + timedelta(days=CHECKIN_RETENTION_DAYS),
     )
 
     db.add(new_record)
@@ -817,19 +848,31 @@ async def create_checkin(
         user_id=student_id,
         resource_type="checkin",
         resource_id=new_record.id,
-        details=f"session_id={session_id}; status={checkin_status.value}; risk_score={total_risk}",
+        details=(
+            f"session_id={session_id}; status={checkin_status.value}; "
+            f"risk_score={total_risk}; latitude={payload.latitude}; longitude={payload.longitude}"
+        ),
         success=checkin_status != CheckinStatus.rejected,
     )
-    if checkin_status in (CheckinStatus.approved, CheckinStatus.rejected):
+    if checkin_status in (
+        CheckinStatus.approved, CheckinStatus.flagged, CheckinStatus.rejected
+    ):
         add_audit_log(
             db,
             request,
-            "checkin_approved" if checkin_status == CheckinStatus.approved else "checkin_rejected",
+            f"checkin_{checkin_status.value}",
             user_id=student_id,
             resource_type="checkin",
             resource_id=new_record.id,
             details=f"session_id={session_id}; risk_score={total_risk}",
             success=checkin_status == CheckinStatus.approved,
+        )
+    if checkin_status == CheckinStatus.rejected:
+        add_audit_log(
+            db, request, "security_violation",
+            user_id=student_id, resource_type="checkin", resource_id=new_record.id,
+            details=f"session_id={session_id}; factors={json.dumps(risk_factors)}",
+            success=False,
         )
     db.commit()
     db.refresh(new_record)

@@ -3,6 +3,15 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
 
+AUDIT_ACTION_VALUES = (
+    'login_success', 'login_failed', 'logout', 'user_created', 'user_updated',
+    'checkin_attempted', 'checkin_approved', 'checkin_flagged',
+    'checkin_rejected', 'checkin_appealed', 'checkin_reviewed',
+    'session_created', 'session_updated', 'session_deleted',
+    'enrollment_added', 'enrollment_removed', 'device_registered',
+    'face_enrolled', 'data_exported', 'security_violation',
+)
+
 class UserModel(Base):
     __tablename__ = "users"
 
@@ -207,12 +216,7 @@ class AuditLogModel(Base):
     id = Column(String(36), primary_key=True)
     user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     
-    action = Column(Enum(
-        'login_success', 'login_failed', 'logout', 'user_created',
-        'checkin_attempted', 'checkin_approved', 'checkin_rejected',
-        'data_exported', 'security_violation',
-        name="audit_action_enum"
-    ), nullable=False)
+    action = Column(Enum(*AUDIT_ACTION_VALUES, name="audit_action_enum"), nullable=False)
     
     resource_type = Column(String(50), nullable=True)
     resource_id = Column(String(36), nullable=True)

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, Enum as SQLEnum, ForeignKey, create_engine, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
@@ -13,6 +13,7 @@ from app.security import get_current_user
 from app.models import CourseModel as Course, SessionModel, EnrollmentModel as CourseEnrollment, CheckinModel as AttendanceRecord
 from app.database import get_db
 from app.course_access import require_course_staff_access, staff_course_ids
+from app.audit import add_audit_log
 
 # --- Database & Base Setup ---
 load_dotenv()
@@ -168,6 +169,7 @@ router = APIRouter(prefix="/sessions", tags=["Session Management"])
 @router.post("/", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 def create_session(
     payload: SessionCreate,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -208,6 +210,15 @@ def create_session(
     )
 
     db.add(new_session)
+    add_audit_log(
+        db,
+        request,
+        "session_created",
+        user_id=str(current_user.get("id")),
+        resource_type="session",
+        resource_id=new_session.id,
+        details=f"course_id={new_session.course_id}",
+    )
     db.commit()
     db.refresh(new_session)
     
@@ -399,6 +410,7 @@ def get_session_details(
 def update_session(
     id: str,
     payload: SessionUpdate,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -448,6 +460,15 @@ def update_session(
     for key, value in update_data.items():
         setattr(session_obj, key, value)
 
+    add_audit_log(
+        db,
+        request,
+        "session_updated",
+        user_id=str(current_user.get("id")),
+        resource_type="session",
+        resource_id=session_obj.id,
+        details=f"updated_fields={','.join(update_data.keys())}",
+    )
     db.commit()
     db.refresh(session_obj)
 
@@ -460,6 +481,7 @@ def update_session(
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_session(
     id: str,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -495,5 +517,14 @@ def delete_session(
             )
         )
 
+    add_audit_log(
+        db,
+        request,
+        "session_deleted",
+        user_id=str(current_user.get("id")),
+        resource_type="session",
+        resource_id=session_obj.id,
+        details=f"course_id={session_obj.course_id}",
+    )
     db.delete(session_obj)
     db.commit()

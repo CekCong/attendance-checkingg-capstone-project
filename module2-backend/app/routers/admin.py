@@ -109,7 +109,8 @@ router = APIRouter(prefix="/admin", tags=["Admin Operations"])
 @router.patch("/users/{user_id}/deactivate", response_model=UserResponse)
 def deactivate_user(
     user_id: str,
-    _: Dict[str, Any] = Depends(require_admin),
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
     user = db.query(User).filter(User.id == user_id).first()
@@ -117,6 +118,11 @@ def deactivate_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User '{user_id}' not found.")
 
     user.is_active = False
+    add_audit_log(
+        db, request, "user_updated",
+        user_id=str(admin_user.get("id")), resource_type="user", resource_id=user.id,
+        details="Account deactivated",
+    )
     db.commit()
     db.refresh(user)
     return user
@@ -126,7 +132,8 @@ def deactivate_user(
 @router.patch("/users/{user_id}/activate", response_model=UserResponse)
 def activate_user(
     user_id: str,
-    _: Dict[str, Any] = Depends(require_admin),
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
     user = db.query(User).filter(User.id == user_id).first()
@@ -134,6 +141,11 @@ def activate_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User '{user_id}' not found.")
 
     user.is_active = True
+    add_audit_log(
+        db, request, "user_updated",
+        user_id=str(admin_user.get("id")), resource_type="user", resource_id=user.id,
+        details="Account activated",
+    )
     db.commit()
     db.refresh(user)
     return user
@@ -211,7 +223,8 @@ def bulk_create_users(
 def update_session_status(
     session_id: str,
     payload: SessionStatusUpdate,
-    _: Dict[str, Any] = Depends(require_admin),
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
     session_obj = db.query(SessionModel).filter(SessionModel.id == session_id).first()
@@ -222,6 +235,11 @@ def update_session_status(
         )
 
     session_obj.status = payload.status
+    add_audit_log(
+        db, request, "session_updated",
+        user_id=str(admin_user.get("id")), resource_type="session", resource_id=session_obj.id,
+        details=f"status={payload.status.value}",
+    )
     db.commit()
     return {"message": f"Session status updated to '{payload.status.value}' successfully."}
 
@@ -230,7 +248,8 @@ def update_session_status(
 @router.post("/enrollments/", response_model=EnrollmentResponse, status_code=status.HTTP_201_CREATED)
 def create_enrollment(
     payload: EnrollmentCreate,
-    _: Dict[str, Any] = Depends(require_admin),
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
     enrollment = EnrollmentModel(
@@ -242,6 +261,11 @@ def create_enrollment(
 
     try:
         db.add(enrollment)
+        add_audit_log(
+            db, request, "enrollment_added",
+            user_id=str(admin_user.get("id")), resource_type="enrollment", resource_id=enrollment.id,
+            details=f"course_id={enrollment.course_id}; student_id={enrollment.student_id}",
+        )
         db.commit()
         db.refresh(enrollment)
         return {

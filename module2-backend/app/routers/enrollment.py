@@ -2,7 +2,7 @@ from sqlalchemy import or_
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, func, create_engine
 from sqlalchemy.dialects.postgresql import UUID
@@ -10,6 +10,7 @@ from sqlalchemy.orm import declarative_base, Session, relationship, sessionmaker
 from ..security import get_current_user
 from ..course_access import require_course_staff_access
 from ..database import get_db as shared_get_db
+from ..audit import add_audit_log
 import os
 from dotenv import load_dotenv
 
@@ -102,6 +103,7 @@ router = APIRouter(prefix="/enrollments", tags=["Enrollments"])
 @router.post("/", response_model=StudentEnrollmentResponse, status_code=status.HTTP_201_CREATED)
 def create_enrollment(
     payload: EnrollmentCreate,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -151,6 +153,11 @@ def create_enrollment(
         is_active=True
     )
     db.add(new_enrollment)
+    add_audit_log(
+        db, request, "enrollment_added",
+        user_id=str(current_user.get("id")), resource_type="enrollment", resource_id=new_enrollment.id,
+        details=f"course_id={course_id}; student_id={student_id}",
+    )
     db.commit()
     db.refresh(new_enrollment)
 
@@ -168,6 +175,7 @@ def create_enrollment(
 @router.post("/bulk", response_model=BulkEnrollmentResponse, status_code=status.HTTP_200_OK)
 def bulk_enroll_students(
     payload: BulkEnrollmentRequest,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -217,6 +225,11 @@ def bulk_enroll_students(
                     hashed_password="PENDING_PASSWORD_RESET"  # Placeholder for newly created placeholder accounts
                 )
                 db.add(student)
+                add_audit_log(
+                    db, request, "user_created",
+                    user_id=str(current_user.get("id")), resource_type="user", resource_id=student.id,
+                    details="Created by bulk enrollment",
+                )
                 db.commit()
                 db.refresh(student)
                 created_count += 1
@@ -238,6 +251,11 @@ def bulk_enroll_students(
         if existing_enrollment:
             if not existing_enrollment.is_active:
                 existing_enrollment.is_active = True
+                add_audit_log(
+                    db, request, "enrollment_added",
+                    user_id=str(current_user.get("id")), resource_type="enrollment", resource_id=existing_enrollment.id,
+                    details=f"course_id={course_id}; student_id={student.id}; reactivated=true",
+                )
                 db.commit()
                 enrolled_count += 1
                 details.append(BulkEnrollmentDetail(email=email, status="enrolled"))
@@ -253,6 +271,11 @@ def bulk_enroll_students(
                 is_active=True
             )
             db.add(new_enrollment)
+            add_audit_log(
+                db, request, "enrollment_added",
+                user_id=str(current_user.get("id")), resource_type="enrollment", resource_id=new_enrollment.id,
+                details=f"course_id={course_id}; student_id={student.id}",
+            )
             db.commit()
             enrolled_count += 1
             details.append(BulkEnrollmentDetail(email=email, status="enrolled"))
@@ -391,6 +414,7 @@ def get_course_enrollments(
 @router.delete("/{enrollment_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_enrollment(
     enrollment_id: uuid.UUID,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -424,6 +448,11 @@ def delete_enrollment(
             )
         require_course_staff_access(db, current_user, enrollment.course_id)
 
+    add_audit_log(
+        db, request, "enrollment_removed",
+        user_id=str(current_user.get("id")), resource_type="enrollment", resource_id=enrollment.id,
+        details=f"course_id={enrollment.course_id}; student_id={enrollment.student_id}",
+    )
     db.delete(enrollment)
     db.commit()
 

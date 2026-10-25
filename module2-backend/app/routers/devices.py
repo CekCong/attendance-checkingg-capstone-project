@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional, Any, List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from ..database import get_db as shared_get_db
 from ..models import DeviceModel
 from ..security import get_current_user, require_roles
+from ..audit import add_audit_log
 
 load_dotenv()
 
@@ -85,6 +86,7 @@ def list_all_devices(
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=DeviceResponse)
 def register_device(
     payload: DeviceRegisterRequest,
+    request: Request,
     current_user: Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -113,6 +115,15 @@ def register_device(
     )
 
     db.add(new_device)
+    add_audit_log(
+        db,
+        request,
+        "device_registered",
+        user_id=user_id,
+        resource_type="device",
+        resource_id=new_device.id,
+        details=f"platform={payload.platform or 'unknown'}",
+    )
     db.commit()
     db.refresh(new_device)
     return new_device

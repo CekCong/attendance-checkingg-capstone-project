@@ -2,7 +2,7 @@ import uuid
 import html
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -12,6 +12,7 @@ from ..database import get_db
 from ..models import UserModel as User
 from ..security import get_current_user, require_roles
 from ..services.face_client import FaceServiceError, enroll_face as enroll_face_with_service
+from ..audit import add_audit_log
 
 # --- SQLAlchemy Model ---
 class UserRole(str, enum.Enum):
@@ -124,6 +125,7 @@ def get_me(
 @router.put("/me", response_model=UserResponse)
 def update_me(
     body: UpdateMeBody,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -138,6 +140,11 @@ def update_me(
     for field, value in update_data.items():
         setattr(user, field, value)
 
+    add_audit_log(
+        db, request, "user_updated",
+        user_id=user.id, resource_type="user", resource_id=user.id,
+        details=f"updated_fields={','.join(update_data.keys())}",
+    )
     db.commit()
     db.refresh(user)
     return user
@@ -147,6 +154,7 @@ def update_me(
 @router.post("/me/face/enroll", response_model=FaceEnrollResponse)
 async def enroll_face(
     body: FaceEnrollBody,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -171,6 +179,10 @@ async def enroll_face(
     user.face_embedding_hash = embedding_hash
     user.face_enrolled = True
 
+    add_audit_log(
+        db, request, "face_enrolled",
+        user_id=user.id, resource_type="user", resource_id=user.id,
+    )
     db.commit()
 
     return {
@@ -245,7 +257,8 @@ def get_user(
 def update_user_details(
     user_id: str,
     body: AdminUpdateUserBody,
-    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+    request: Request,
+    admin_user: Dict[str, Any] = Depends(require_roles("admin")),
     db: Session = Depends(get_db)
 ):
     user = db.query(User).filter(User.id == user_id).first()
@@ -256,6 +269,11 @@ def update_user_details(
     for field, value in update_data.items():
         setattr(user, field, value)
 
+    add_audit_log(
+        db, request, "user_updated",
+        user_id=str(admin_user.get("id")), resource_type="user", resource_id=user.id,
+        details=f"updated_fields={','.join(update_data.keys())}",
+    )
     db.commit()
     db.refresh(user)
     return user
