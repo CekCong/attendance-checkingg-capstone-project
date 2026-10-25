@@ -3,7 +3,7 @@ import math
 import json
 import enum
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from sqlalchemy.orm import Session
@@ -13,11 +13,13 @@ from ..database import get_db as shared_get_db
 from ..models import CheckinModel, DeviceModel, EnrollmentModel, SessionModel, UserModel as User
 from ..audit import add_audit_log
 from ..course_access import require_course_staff_access, staff_course_ids
+from ..device_challenge import DeviceChallengeStoreError, consume_device_challenge
 from ..retention import CHECKIN_RETENTION_DAYS
 from ..services.face_client import (
     FaceServiceError,
     assess_risk,
     check_liveness,
+    create_liveness_challenge,
     verify_face,
 )
 
@@ -64,9 +66,23 @@ class CheckinCreate(BaseModel):
     longitude: float
     location_accuracy_meters: Optional[float] = None
     device_fingerprint: str
-    liveness_challenge_response: Optional[str] = None
+    device_signature: Optional[str] = Field(None, max_length=4096)
+    device_challenge: Optional[str] = Field(None, max_length=256)
+    liveness_challenge_response: Optional[str | List[str]] = None
+    liveness_challenge_id: Optional[str] = None
+    liveness_challenge_type: Optional[Literal["passive", "blink", "head_turn", "smile"]] = None
     qr_code: Optional[str] = None
     face_image: Optional[str] = None  # Base64-encoded image for liveness check
+
+
+class LivenessChallengeCreate(BaseModel):
+    session_id: uuid.UUID
+
+
+class LivenessChallengeResponse(BaseModel):
+    challenge_id: str
+    challenge_type: Literal["blink", "head_turn", "smile"]
+    expires_in: int
 
 class RiskFactor(BaseModel):
     type: str
@@ -184,6 +200,56 @@ class ReviewResponse(BaseModel):
 
 # --- Router ---
 router = APIRouter(prefix="/checkins", tags=["Check-ins"])
+
+
+@router.post("/liveness-challenge", response_model=LivenessChallengeResponse)
+async def request_liveness_challenge(
+    payload: LivenessChallengeCreate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Only students can request a liveness challenge.")
+
+    student_id = str(current_user.get("id"))
+    session_id = str(payload.session_id)
+    session_obj = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if session_obj.status != SessionStatus.active:
+        raise HTTPException(status_code=400, detail="Session is not currently active.")
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    opens_at = session_obj.checkin_opens_at.replace(tzinfo=None)
+    closes_at = session_obj.checkin_closes_at.replace(tzinfo=None)
+    if now < opens_at or now > closes_at:
+        raise HTTPException(status_code=400, detail="Check-in window is closed for this session.")
+
+    enrollment = db.query(EnrollmentModel).filter(
+        EnrollmentModel.student_id == student_id,
+        EnrollmentModel.course_id == session_obj.course_id,
+        EnrollmentModel.is_active.is_(True),
+    ).first()
+    if not enrollment:
+        raise HTTPException(status_code=403, detail="You are not actively enrolled in this course.")
+
+    existing = db.query(CheckinModel).filter(
+        CheckinModel.student_id == student_id,
+        CheckinModel.session_id == session_id,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Already checked in to this session.")
+
+    student = db.query(User).filter(User.id == student_id).first()
+    if not student or not student.camera_consent:
+        raise HTTPException(status_code=403, detail="Camera consent is required.")
+    if not student.face_enrolled or not student.face_embedding_hash:
+        raise HTTPException(status_code=400, detail="Face enrollment is required for active liveness.")
+
+    try:
+        return await create_liveness_challenge(student_id, session_id)
+    except FaceServiceError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
 
 # GET /checkins/flagged - Get check-ins requiring review (flagged or appealed)
 @router.get("/flagged", response_model=FlaggedCheckinPaginatedResponse, status_code=status.HTTP_200_OK)
@@ -700,12 +766,48 @@ async def create_checkin(
             detail="This course requires an active device registered to the student.",
         )
 
+    attestation_supplied = (
+        payload.device_signature is not None
+        or payload.device_challenge is not None
+    )
+    if attestation_supplied:
+        if not payload.device_signature or not payload.device_challenge:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Both device signature and challenge are required.",
+            )
+        if device is None or not device.public_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Device attestation requires a registered public key.",
+            )
+        try:
+            challenge_valid = consume_device_challenge(
+                payload.device_challenge,
+                student_id,
+                device.id,
+                session_id,
+            )
+        except DeviceChallengeStoreError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+        if not challenge_valid:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Device challenge is invalid, expired, or already used.",
+            )
+
     if payload.liveness_challenge_response:
         try:
             liveness_result = await check_liveness(
                 payload.liveness_challenge_response,
-                challenge_type="passive",
+                challenge_type=payload.liveness_challenge_type or "passive",
                 reference_template_hash=student.face_embedding_hash,
+                challenge_id=payload.liveness_challenge_id,
+                user_id=student_id,
+                session_id=session_id,
             )
             liveness_passed = bool(liveness_result["liveness_passed"])
             liveness_score = float(liveness_result["liveness_score"])
@@ -744,7 +846,14 @@ async def create_checkin(
         else:
             try:
                 face_result = await verify_face(
-                    payload.liveness_challenge_response,
+                    (
+                        payload.face_image
+                        or (
+                            payload.liveness_challenge_response[0]
+                            if isinstance(payload.liveness_challenge_response, list)
+                            else payload.liveness_challenge_response
+                        )
+                    ),
                     student.face_embedding_hash,
                 )
                 face_match_passed = bool(face_result["match_passed"])
@@ -782,7 +891,9 @@ async def create_checkin(
                     if face_match_score is not None
                     else (0.0 if face_match_required else 1.0)
                 ),
+                device_signature=payload.device_signature,
                 device_public_key=device.public_key if device else None,
+                device_challenge=payload.device_challenge,
                 ip_address=client_ip(request),
                 user_agent=request.headers.get("user-agent"),
                 latitude=payload.latitude,
@@ -856,7 +967,8 @@ async def create_checkin(
         liveness_passed=liveness_passed,
         liveness_score=liveness_score,
         liveness_challenge_type=(
-            "passive" if payload.liveness_challenge_response else None
+            (payload.liveness_challenge_type or "passive")
+            if payload.liveness_challenge_response else None
         ),
         face_match_passed=face_match_passed,
         face_match_score=face_match_score,

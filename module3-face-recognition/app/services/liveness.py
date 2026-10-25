@@ -95,11 +95,9 @@ def analyze_face_mesh(image_array):
 
     nose_tip_z = float(landmarks[NOSE_TIP_INDEX].z)
 
-    depth = abs(nose_tip_z)
-
-    if depth >= GOOD_DEPTH_THRESHOLD:
+    if nose_tip_z <= -GOOD_DEPTH_THRESHOLD:
         depth_quality = "good"
-    elif depth >= MODERATE_DEPTH_THRESHOLD:
+    elif nose_tip_z <= -MODERATE_DEPTH_THRESHOLD:
         depth_quality = "moderate"
     else:
         depth_quality = "poor"
@@ -235,9 +233,25 @@ def depth_score(mesh_result):
     if nose_tip_z is None:
         return 0.0
 
-    depth = abs(float(nose_tip_z))
-    score = (depth - MIN_DEPTH) / (GOOD_DEPTH_THRESHOLD - MIN_DEPTH)
+    # MediaPipe uses negative z for points projecting towards the camera.
+    # Do not use abs(), because a positive z value is not evidence of the
+    # forward nose depth described by the API specification.
+    forward_depth = -float(nose_tip_z)
+    score = (forward_depth - MIN_DEPTH) / (GOOD_DEPTH_THRESHOLD - MIN_DEPTH)
     return round(max(0.0, min(score, 1.0)), 4)
+
+
+def mesh_score(mesh_result):
+    """Give full credit only for a complete mesh and strict partial credit otherwise."""
+    landmark_count = max(0, int(mesh_result.get("landmark_count", 0)))
+    if (
+        mesh_result.get("face_mesh_complete")
+        and landmark_count >= EXPECTED_LANDMARK_COUNT
+    ):
+        return 1.0
+
+    completion_ratio = min(landmark_count / EXPECTED_LANDMARK_COUNT, 1.0)
+    return round(completion_ratio * 0.75, 4)
 
 
 def passive_liveness_check(request: LivenessRequest):
@@ -280,10 +294,7 @@ def passive_liveness_check(request: LivenessRequest):
         }
     landmarks = mesh_result.pop("landmarks", None)
     passive_depth_score = depth_score(mesh_result)
-    mesh_completeness_score = min(
-        mesh_result["landmark_count"] / EXPECTED_LANDMARK_COUNT,
-        1.0,
-    )
+    mesh_completeness_score = mesh_score(mesh_result)
     passive_texture_score = texture_score(image, face)
     passive_color_score = color_distribution_score(image, face)
 

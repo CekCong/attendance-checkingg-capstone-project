@@ -189,7 +189,11 @@ def ip_country_risk(ip_address):
     if ip.is_private or ip.is_loopback:
         return 0.0
 
-    country = get_ip_info(str(ip)).get("country")
+    ip_info = get_ip_info(str(ip))
+    if not ip_info:
+        return 1.0
+
+    country = ip_info.get("country")
     return 1.0 if country and country.upper() != "SG" else 0.0
 
 
@@ -200,6 +204,10 @@ def network_risk(ip_address, user_agent):
     except (ValueError, TypeError):
         return INVALID_IP_RISK
 
+    ip_address_text = str(ip)
+    if not get_ip_info(ip_address_text):
+        return 1.0
+
     risk = 0.0
 
     if ip.is_private or ip.is_loopback:
@@ -209,7 +217,6 @@ def network_risk(ip_address, user_agent):
     if any(keyword in user_agent_lower for keyword in VPN_KEYWORDS):
         risk = max(risk, VPN_KEYWORD_RISK)
 
-    ip_address_text = str(ip)
     if is_datacenter_ip(ip_address_text):
         risk = max(risk, DATACENTER_IP_RISK)
     if is_vpn_ip(ip_address_text):

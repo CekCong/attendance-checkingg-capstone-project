@@ -39,7 +39,19 @@
 
 
 from fastapi import APIRouter, HTTPException
-from app.schemas.liveness import LivenessRequest, LivenessResponse
+from redis.exceptions import RedisError
+
+from app.schemas.liveness import (
+    LivenessChallengeRequest,
+    LivenessChallengeResponse,
+    LivenessRequest,
+    LivenessResponse,
+)
+from app.services.liveness_challenge import (
+    CHALLENGE_TTL_SECONDS,
+    consume_liveness_challenge,
+    create_liveness_challenge,
+)
 from app.services.liveness import (
     passive_liveness_check,
     blink_liveness_check,
@@ -49,8 +61,47 @@ from app.services.liveness import (
 
 router = APIRouter(tags=["Liveness"])
 
+
+@router.post("/liveness/challenge", response_model=LivenessChallengeResponse)
+async def issue_liveness_challenge(request: LivenessChallengeRequest):
+    try:
+        challenge_id, challenge_type = create_liveness_challenge(
+            request.user_id,
+            request.session_id,
+        )
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Challenge store is unavailable.") from exc
+
+    return LivenessChallengeResponse(
+        challenge_id=challenge_id,
+        challenge_type=challenge_type,
+        expires_in=CHALLENGE_TTL_SECONDS,
+    )
+
 @router.post("/liveness/check", response_model=LivenessResponse)
 async def check_liveness(request: LivenessRequest):
+    active_challenge = request.challenge_type in {"blink", "head_turn", "smile"}
+    if active_challenge and not request.challenge_id:
+        raise HTTPException(status_code=400, detail="Active liveness requires a challenge ID.")
+
+    if request.challenge_id:
+        if not request.user_id or not request.session_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Challenge user and session are required.",
+            )
+        try:
+            valid, error = consume_liveness_challenge(
+                request.challenge_id,
+                request.user_id,
+                request.session_id,
+                request.challenge_type,
+            )
+        except RedisError as exc:
+            raise HTTPException(status_code=503, detail="Challenge store is unavailable.") from exc
+        if not valid:
+            raise HTTPException(status_code=409, detail=error)
+
     if isinstance(request.challenge_response, str) and request.challenge_type == "passive":
         return passive_liveness_check(request)
     elif isinstance(request.challenge_response, list) and request.challenge_type == "blink":

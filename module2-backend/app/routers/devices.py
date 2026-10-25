@@ -12,6 +12,11 @@ from ..database import get_db as shared_get_db
 from ..models import DeviceModel
 from ..security import get_current_user, require_roles
 from ..audit import add_audit_log
+from ..device_challenge import (
+    DEVICE_CHALLENGE_TTL_SECONDS,
+    DeviceChallengeStoreError,
+    create_device_challenge,
+)
 
 load_dotenv()
 
@@ -42,6 +47,14 @@ class DeviceUpdateRequest(BaseModel):
     device_name: Optional[str] = Field(None, max_length=255)
     is_trusted: Optional[bool] = Field(None, description="Admin only")
     is_active: Optional[bool] = Field(None, description="Deactivate device")
+
+class DeviceChallengeRequest(BaseModel):
+    device_fingerprint: str = Field(..., max_length=64)
+    session_id: uuid.UUID
+
+class DeviceChallengeResponse(BaseModel):
+    challenge: str
+    expires_in: int
 
 class DeviceResponse(BaseModel):
     id: str
@@ -138,6 +151,47 @@ def list_my_devices(
     user_id, _ = get_user_id_and_role(current_user)
     devices = db.query(DeviceModel).filter(DeviceModel.user_id == user_id).all()
     return devices
+
+
+@router.post("/challenge", response_model=DeviceChallengeResponse)
+def issue_device_challenge(
+    payload: DeviceChallengeRequest,
+    current_user: Any = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Issue a one-time challenge for a registered device to sign."""
+    user_id, _ = get_user_id_and_role(current_user)
+    device = db.query(DeviceModel).filter(
+        DeviceModel.device_fingerprint == payload.device_fingerprint,
+        DeviceModel.user_id == user_id,
+        DeviceModel.is_active.is_(True),
+    ).first()
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active registered device not found.",
+        )
+    if not device.public_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The registered device does not have a public key.",
+        )
+
+    try:
+        challenge = create_device_challenge(
+            user_id,
+            device.id,
+            str(payload.session_id),
+        )
+    except DeviceChallengeStoreError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    return {
+        "challenge": challenge,
+        "expires_in": DEVICE_CHALLENGE_TTL_SECONDS,
+    }
 
 
 @router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)

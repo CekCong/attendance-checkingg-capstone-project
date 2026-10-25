@@ -50,6 +50,7 @@ Statistics
 
 Devices
 - POST /devices/register
+- POST /devices/challenge
 - GET /devices/my-devices
 - DELETE /devices/{device_id}
 - PATCH /devices/{device_id}
