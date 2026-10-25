@@ -9,8 +9,9 @@ from sqlalchemy.orm import Session
 import enum
 
 from ..database import get_db
-from ..models import UserModel as User
+from ..models import EnrollmentModel, UserModel as User
 from ..security import get_current_user, require_roles
+from ..course_access import staff_course_ids
 from ..services.face_client import FaceServiceError, enroll_face as enroll_face_with_service
 from ..audit import add_audit_log
 
@@ -238,16 +239,26 @@ def get_user(
     db: Session = Depends(get_db)
 ):
     current_role = current_user.get("role")
-    
-    if current_role not in {"admin", "instructor", "ta"} and current_user.get("id") != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions"
-        )
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    is_self = str(current_user.get("id")) == user_id
+    if current_role != "admin" and not is_self:
+        allowed = False
+        if current_role in {"instructor", "ta"} and user.role == "student":
+            allowed_courses = staff_course_ids(db, current_user)
+            allowed = bool(allowed_courses) and db.query(EnrollmentModel).filter(
+                EnrollmentModel.student_id == user_id,
+                EnrollmentModel.course_id.in_(allowed_courses),
+                EnrollmentModel.is_active.is_(True),
+            ).first() is not None
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions"
+            )
 
     return user
 
