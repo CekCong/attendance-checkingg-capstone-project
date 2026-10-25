@@ -618,9 +618,6 @@ async def create_checkin(
         session_obj.require_face_match
         or (session_obj.course and session_obj.course.require_face_recognition)
     )
-    device_binding_required = bool(
-        session_obj.course and session_obj.course.require_device_binding
-    )
 
     enrollment = (
         db.query(EnrollmentModel)
@@ -655,27 +652,6 @@ async def create_checkin(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Check-in window is closed for this session."
-        )
-
-    student = db.query(User).filter(User.id == student_id).first()
-    if not student:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.",
-        )
-    if not student.geolocation_consent:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Geolocation consent is required for check-in.",
-        )
-    if (
-        session_obj.require_liveness_check
-        or face_match_required
-        or payload.liveness_challenge_response is not None
-    ) and not student.camera_consent:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Camera consent is required for this check-in.",
         )
 
     if not (1.15 <= payload.latitude <= 1.4833 and 103.60 <= payload.longitude <= 104.4167):
@@ -751,6 +727,13 @@ async def create_checkin(
     face_embedding_hash = None
     module3_unavailable = False
 
+    student = db.query(User).filter(User.id == student_id).first()
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
     device = (
         db.query(DeviceModel)
         .filter(
@@ -760,12 +743,6 @@ async def create_checkin(
         )
         .first()
     )
-    if device_binding_required and device is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This course requires an active device registered to the student.",
-        )
-
     attestation_supplied = (
         payload.device_signature is not None
         or payload.device_challenge is not None
