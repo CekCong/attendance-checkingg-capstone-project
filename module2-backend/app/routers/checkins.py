@@ -552,6 +552,9 @@ async def create_checkin(
         session_obj.require_face_match
         or (session_obj.course and session_obj.course.require_face_recognition)
     )
+    device_binding_required = bool(
+        session_obj.course and session_obj.course.require_device_binding
+    )
 
     enrollment = (
         db.query(EnrollmentModel)
@@ -677,6 +680,11 @@ async def create_checkin(
         )
         .first()
     )
+    if device_binding_required and device is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This course requires an active device registered to the student.",
+        )
 
     if payload.liveness_challenge_response:
         try:
