@@ -591,6 +591,27 @@ async def create_checkin(
             detail="Check-in window is closed for this session."
         )
 
+    student = db.query(User).filter(User.id == student_id).first()
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+    if not student.geolocation_consent:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Geolocation consent is required for check-in.",
+        )
+    if (
+        session_obj.require_liveness_check
+        or face_match_required
+        or payload.liveness_challenge_response is not None
+    ) and not student.camera_consent:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Camera consent is required for this check-in.",
+        )
+
     if not (1.15 <= payload.latitude <= 1.4833 and 103.60 <= payload.longitude <= 104.4167):
         add_audit_log(
             db, request, "security_violation",
@@ -663,13 +684,6 @@ async def create_checkin(
     face_match_score = None
     face_embedding_hash = None
     module3_unavailable = False
-
-    student = db.query(User).filter(User.id == student_id).first()
-    if not student:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.",
-        )
 
     device = (
         db.query(DeviceModel)
