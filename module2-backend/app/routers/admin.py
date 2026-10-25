@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum, ForeignKey, create_engine, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 import enum
@@ -72,6 +72,35 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class AdminUserStatusResponse(BaseModel):
+    id: str
+    email: EmailStr
+    is_active: bool
+    message: str
+
+class BulkUserCreateRequest(BaseModel):
+    users: List[UserCreate]
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_list(cls, value):
+        return {"users": value} if isinstance(value, list) else value
+
+class BulkUserCreateResponse(BaseModel):
+    created: int
+    failed: int
+    users: List[UserResponse]
+    errors: List[str]
+
+    def __getitem__(self, index):
+        return self.users[index]
+
+class AdminSessionStatusResponse(BaseModel):
+    id: str
+    name: str
+    status: SessionStatus
+    message: str
+
 class SessionStatusUpdate(BaseModel):
     status: SessionStatus
 
@@ -85,9 +114,9 @@ class EnrollmentCreate(BaseModel):
 class EnrollmentResponse(BaseModel):
     id: str
     course_id: str
-    user_id: str
-    role: str
-    created_at: datetime
+    student_id: str
+    is_active: bool
+    enrolled_at: datetime
 
     class Config:
         from_attributes = True
@@ -106,7 +135,7 @@ router = APIRouter(prefix="/admin", tags=["Admin Operations"])
 
 
 # PATCH /admin/users/{user_id}/deactivate - Deactivate user
-@router.patch("/users/{user_id}/deactivate", response_model=UserResponse)
+@router.patch("/users/{user_id}/deactivate", response_model=AdminUserStatusResponse)
 def deactivate_user(
     user_id: str,
     request: Request,
@@ -125,11 +154,16 @@ def deactivate_user(
     )
     db.commit()
     db.refresh(user)
-    return user
+    return {
+        "id": user.id,
+        "email": user.email,
+        "is_active": user.is_active,
+        "message": "User deactivated successfully",
+    }
 
 
 # PATCH /admin/users/{user_id}/activate - Activate user
-@router.patch("/users/{user_id}/activate", response_model=UserResponse)
+@router.patch("/users/{user_id}/activate", response_model=AdminUserStatusResponse)
 def activate_user(
     user_id: str,
     request: Request,
@@ -148,21 +182,27 @@ def activate_user(
     )
     db.commit()
     db.refresh(user)
-    return user
+    return {
+        "id": user.id,
+        "email": user.email,
+        "is_active": user.is_active,
+        "message": "User activated successfully",
+    }
 
 
 # POST /admin/users/bulk - Bulk create users
-@router.post("/users/bulk", response_model=List[UserResponse], status_code=status.HTTP_201_CREATED)
+@router.post("/users/bulk", response_model=BulkUserCreateResponse, status_code=status.HTTP_201_CREATED)
 def bulk_create_users(
-    users_data: List[UserCreate],
+    users_data: BulkUserCreateRequest,
     request: Request,
     _: Dict[str, Any] = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
+    requested_users = users_data.users if isinstance(users_data, BulkUserCreateRequest) else users_data
     created_users = []
     
     # Pre-check for duplicate emails within payload or DB
-    emails = [str(user.email).strip().lower() for user in users_data]
+    emails = [str(user.email).strip().lower() for user in requested_users]
     if len(set(emails)) != len(emails):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -182,7 +222,7 @@ def bulk_create_users(
             detail=f"The following emails already exist: {', '.join(existing_emails)}"
         )
 
-    for data in users_data:
+    for data in requested_users:
         user = User(
             id=str(uuid.uuid4()),
             email=str(data.email).strip().lower(),
@@ -209,7 +249,12 @@ def bulk_create_users(
         db.commit()
         for user in created_users:
             db.refresh(user)
-        return created_users
+        return BulkUserCreateResponse(
+            created=len(created_users),
+            failed=0,
+            users=[UserResponse.model_validate(user) for user in created_users],
+            errors=[],
+        )
     except Exception as e:
         db.rollback()
         raise HTTPException(
@@ -219,7 +264,11 @@ def bulk_create_users(
 
 
 # PATCH /admin/sessions/{session_id}/status - Update session status
-@router.patch("/sessions/{session_id}/status", status_code=status.HTTP_200_OK)
+@router.patch(
+    "/sessions/{session_id}/status",
+    response_model=AdminSessionStatusResponse,
+    status_code=status.HTTP_200_OK,
+)
 def update_session_status(
     session_id: str,
     payload: SessionStatusUpdate,
@@ -234,6 +283,11 @@ def update_session_status(
             detail=f"Session '{session_id}' not found."
         )
 
+    previous_status = (
+        session_obj.status.value
+        if hasattr(session_obj.status, "value")
+        else str(session_obj.status)
+    )
     session_obj.status = payload.status
     add_audit_log(
         db, request, "session_updated",
@@ -241,7 +295,15 @@ def update_session_status(
         details=f"status={payload.status.value}",
     )
     db.commit()
-    return {"message": f"Session status updated to '{payload.status.value}' successfully."}
+    return {
+        "id": session_obj.id,
+        "name": session_obj.name,
+        "status": session_obj.status,
+        "message": (
+            f"Session status changed from '{previous_status}' "
+            f"to '{payload.status.value}'"
+        ),
+    }
 
 
 # POST /admin/enrollments/ - Admin enrollment creation
@@ -271,9 +333,9 @@ def create_enrollment(
         return {
             "id": enrollment.id,
             "course_id": enrollment.course_id,
-            "user_id": enrollment.student_id,
-            "role": "student",
-            "created_at": enrollment.enrolled_at,
+            "student_id": enrollment.student_id,
+            "is_active": enrollment.is_active,
+            "enrolled_at": enrollment.enrolled_at,
         }
     except Exception as e:
         db.rollback()
