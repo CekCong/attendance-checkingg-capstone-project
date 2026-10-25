@@ -143,3 +143,14 @@ def create_audit_log(
     db.commit()
     db.refresh(audit_entry)
     return audit_entry
+
+@router.get("/summary")
+async def get_audit_summary(
+    days: int = 7,
+    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+):
+    return {
+        "period_days": days,
+        "total_logs": 0,
+        "by_action": {},
+    }
