@@ -1,4 +1,4 @@
-import type { InstructorDashboardData } from "./instructorTypes";
+import type { InstructorDashboardData, AuditLogEntry } from "./instructorTypes";
 
 export function buildInstructorDashboard(): InstructorDashboardData {
   const extra = Math.floor(Date.now() / 30_000) % 4;
@@ -175,7 +175,7 @@ export function buildInstructorDashboard(): InstructorDashboardData {
     },
   ];
 
-  const auditLogs = [
+  const auditLogs: AuditLogEntry[] = [
     {
       id: "audit-1",
       userEmail: "instructor@saiv.local",

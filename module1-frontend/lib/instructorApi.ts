@@ -48,11 +48,9 @@ Promise<BackendFlaggedCheckin[]> {
 
   const data = await response.json();
 
-  if (Array.isArray(data)) {
-    return data;
-  }
-
-  return data.items ?? [];
+  return Array.isArray(data)
+    ? data
+    : data.items ?? [];
 }
 
 export async function reviewFlaggedCheckin(
