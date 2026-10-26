@@ -33,10 +33,21 @@ export type AttendanceRecord = {
   status: CheckinStatus;
   checkedInAt: string;
   riskScore: number;
-  livenessScore: number;
-  faceMatchScore: number;
-  latitude: number;
-  longitude: number;
+  livenessScore?: number;
+  faceMatchScore?: number;
+  latitude?: number;
+  longitude?: number;
+};
+
+export type AuditLogEntry = {
+  id: string;
+  userEmail: string;
+  action: string;
+  resourceType: string;
+  resourceId: string;
+  success: boolean;
+  timestamp: string;
+  details?: Record<string, string | number | boolean>;
 };
 
 export type InstructorDashboardData = {
@@ -44,6 +55,7 @@ export type InstructorDashboardData = {
   todaySessions: InstructorSession[];
   flagged: FlaggedCheckin[];
   records: AttendanceRecord[];
+  auditLogs: AuditLogEntry[];
   kpis: {
     todayCheckins: number;
     flaggedPending: number;

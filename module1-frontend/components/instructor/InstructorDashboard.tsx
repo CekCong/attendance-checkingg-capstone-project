@@ -12,6 +12,18 @@ import type {
   InstructorDashboardData,
   InstructorSession,
 } from "@/lib/instructorTypes";
+import { useAuth } from "@/components/auth/AuthProvider";
+import {
+  fetchFlaggedCheckins,
+  reviewFlaggedCheckin,
+  fetchSessions,
+  createBackendSession,
+  fetchCourses,
+  fetchCheckins,
+  updateBackendSessionStatus,
+  fetchAuditLogs,
+  type BackendCourse,
+} from "@/lib/instructorApi";
 
 const POLL_MS = 30_000;
 
@@ -35,6 +47,8 @@ function statusClass(status: string) {
 }
 
 export function InstructorDashboard() {
+  const { accessToken } = useAuth();
+
   const [data, setData] = useState<InstructorDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAllFlagged, setShowAllFlagged] = useState(false);
@@ -43,18 +57,138 @@ export function InstructorDashboard() {
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [created, setCreated] = useState<string | null>(null);
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditAction, setAuditAction] = useState("all");
+  const [auditResult, setAuditResult] = useState("all");
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [courses, setCourses] = useState<BackendCourse[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [sessionStart, setSessionStart] = useState("");
+  const [sessionEnd, setSessionEnd] = useState("");
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [updatingSessionId, setUpdatingSessionId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/instructor/dashboard", { cache: "no-store" });
-      if (!response.ok) throw new Error("Could not load dashboard");
-      setData((await response.json()) as InstructorDashboardData);
+      const response = await fetch(
+        "/api/instructor/dashboard",
+        { cache: "no-store" },
+      );
+
+      if (!response.ok) {
+        throw new Error("Could not load dashboard");
+      }
+
+      const dashboard =
+        (await response.json()) as InstructorDashboardData;
+
+      if (accessToken) {
+        const [backendFlagged, backendSessions, backendCourses, backendCheckins, backendAuditLogs,] =
+          await Promise.all([
+            fetchFlaggedCheckins(accessToken),
+            fetchSessions(accessToken),
+            fetchCourses(accessToken),
+            fetchCheckins(accessToken),
+            fetchAuditLogs(accessToken),
+          ]);
+
+          setCourses(backendCourses)
+
+        dashboard.flagged = backendFlagged.map((item) => ({
+          id: item.id,
+          studentName: item.student_name,
+          studentEmail: "",
+          sessionTitle: item.session_name,
+          status: item.status,
+          reason:
+            item.appeal_reason ||
+            item.risk_factors
+              .map((factor) => factor.type)
+              .join(", ") ||
+            "Risk review",
+          riskScore: item.risk_score,
+          checkedInAt: item.checked_in_at,
+        }));
+
+        dashboard.todaySessions = backendSessions.map(
+          (session) => ({
+            id: session.id,
+            title: session.name,
+            courseCode: session.course_code,
+            status:
+              session.status === "active"
+                ? "live"
+                : session.status === "cancelled"
+                  ? "closed"
+                  : session.status,
+            enrolled: session.total_enrolled,
+            checkins: session.checked_in_count,
+
+            flagged: backendFlagged.filter(
+              (item) => item.session_id === session.id,
+            ).length,
+          }),
+        );
+
+        dashboard.records = backendCheckins.map((checkin) => ({
+          checkinId: checkin.id,
+          studentId: checkin.student_id,
+          studentName: checkin.student_name,
+          studentEmail: checkin.student_email,
+          sessionId: checkin.session_id,
+          sessionName: checkin.session_name,
+          sessionDate: checkin.checked_in_at.slice(0, 10),
+          status: checkin.status,
+          checkedInAt: checkin.checked_in_at,
+          riskScore: checkin.risk_score,
+        }));
+
+        dashboard.auditLogs = backendAuditLogs.map((log) => ({
+          id: log.id,
+          userEmail: log.user_id ?? "System",
+
+          action: log.action,
+          resourceType: log.resource_type ?? "",
+          resourceId: log.resource_id ?? "",
+          success: log.success,
+          timestamp: log.timestamp,
+
+          details: {
+            message: log.details ?? "",
+          },
+        }));
+
+        dashboard.kpis.flaggedPending =
+          dashboard.flagged.length;
+
+        dashboard.kpis.liveSessions =
+          backendSessions.filter(
+            (session) => session.status === "active",
+          ).length;
+
+        dashboard.kpis.todayCheckins = backendCheckins.length;
+
+        const approvedCount = backendCheckins.filter(
+          (checkin) => checkin.status === "approved",
+        ).length;
+
+        dashboard.kpis.approvalRate =
+          backendCheckins.length > 0
+            ? approvedCount / backendCheckins.length
+            : 0;
+      }
+
+      setData(dashboard);
       setLastFetch(new Date());
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Refresh failed");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Refresh failed",
+      );
     }
-  }, []);
+  }, [accessToken]);
 
   useEffect(() => {
     void load();
@@ -73,6 +207,66 @@ export function InstructorDashboard() {
     return data.records.filter((row) => row.sessionId === selectedSession);
   }, [data, selectedSession]);
 
+  const auditActions = useMemo(() => {
+    if (!data) return [];
+
+    return Array.from(
+      new Set(data.auditLogs.map((log) => log.action)),
+    ).sort();
+  }, [data]);
+
+  const filteredAuditLogs = useMemo(() => {
+    if (!data) return [];
+
+    const search = auditSearch.trim().toLowerCase();
+
+    return data.auditLogs.filter((log) => {
+      const matchesSearch =
+        !search ||
+        log.userEmail.toLowerCase().includes(search) ||
+        log.action.toLowerCase().includes(search) ||
+        log.resourceType.toLowerCase().includes(search) ||
+        log.resourceId.toLowerCase().includes(search);
+
+      const matchesAction =
+        auditAction === "all" || log.action === auditAction;
+
+      const matchesResult =
+        auditResult === "all" ||
+        (auditResult === "success" && log.success) ||
+        (auditResult === "failed" && !log.success);
+
+      return matchesSearch && matchesAction && matchesResult;
+    });
+  }, [data, auditSearch, auditAction, auditResult]);
+
+  const attendanceAnalytics = useMemo(() => {
+    if (!data) {
+      return {
+        approved: 0,
+        flagged: 0,
+        rejected: 0,
+        total: 0,
+      };
+    }
+
+    const approved = data.records.filter(
+      (record) => record.status === "approved").length;
+
+    const flagged = data.records.filter(
+      (record) => record.status === "flagged").length;
+
+    const rejected = data.records.filter(
+      (record) => record.status === "rejected").length;
+
+    return {
+      approved,
+      flagged,
+      rejected,
+      total: data.records.length
+    };
+  }, [data]);
+
   function exportRecords(format: "csv" | "json") {
     const stamp = new Date().toISOString().slice(0, 10);
     if (format === "csv") {
@@ -84,6 +278,129 @@ export function InstructorDashboard() {
       JSON.stringify(attendanceToJson(filteredRecords), null, 2),
       "application/json",
     );
+  };
+
+  async function reviewCheckin(
+    checkinId: string,
+    decision: "approved" | "rejected",
+  ) {
+    if (!accessToken) {
+      setError("You must be logged in to review check-ins.");
+      return;
+    }
+
+    try {
+      setReviewingId(checkinId);
+      setError(null);
+
+      await reviewFlaggedCheckin(
+        checkinId,
+        decision,
+        accessToken,
+      );
+
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not review check-in",
+      );
+    } finally {
+      setReviewingId(null);
+    }   
+  };
+
+  async function createSession() {
+    if (!accessToken) {
+      setError("You must be logged in to create a session.");
+      return;
+    }
+
+    const title = newTitle.trim();
+
+    if (
+      !selectedCourseId ||
+      !title ||
+      !sessionStart ||
+      !sessionEnd
+    ) {
+      setError("Please select a course and enter a title, start time, and end time.");
+      return;
+    }
+
+    const start = new Date(sessionStart);
+    const end = new Date(sessionEnd);
+
+    if (start <= new Date()) {
+      setError("Session start time must be in the future.");
+      return;
+    }
+
+    if (end <= start) {
+      setError("Session end time must be after the start time.");
+      return;
+    }
+
+    try {
+      setCreatingSession(true);
+      setError(null);
+
+      await createBackendSession(accessToken, {
+        course_id: selectedCourseId,
+        name: title,
+        scheduled_start: start.toISOString(),
+        scheduled_end: end.toISOString(),
+    });
+
+    setCreated(title);
+
+    setNewTitle("");
+    setSelectedCourseId("");
+    setSessionStart("");
+    setSessionEnd("");
+
+    await load();
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Could not create session",
+    );
+  } finally {
+    setCreatingSession(false);
+  }
+}
+
+  async function changeSessionStatus(
+    sessionId: string,
+    status: "active" | "closed",
+  ) {
+    if (!accessToken) {
+      setError("You must be logged in to update sessions.");
+      return;
+    }
+
+    try {
+      setUpdatingSessionId(sessionId);
+      setError(null);
+
+      await updateBackendSessionStatus(
+        accessToken,
+        sessionId,
+        status,
+      );
+
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not update session",
+      );
+    } finally {
+      setUpdatingSessionId(null);
+    }
   }
 
   return (
@@ -124,29 +441,76 @@ export function InstructorDashboard() {
               </span>
             </div>
             <ul className="mt-4 space-y-3">
-              {(data?.todaySessions ?? []).map((session) => (
-                <SessionRow key={session.id} session={session} />
-              ))}
+            {(data?.todaySessions ?? []).map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                updating={updatingSessionId === session.id}
+                onStatusChange={(status) =>
+                  void changeSessionStatus(session.id, status)
+                }
+              />
+            ))}
             </ul>
             <form
               className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]"
               onSubmit={(e) => {
                 e.preventDefault();
-                setCreated(newTitle.trim() || "Untitled session");
-                setNewTitle("");
+                void createSession();
               }}
             >
+              <select
+                value={selectedCourseId}
+                onChange={(e) =>
+                  setSelectedCourseId(e.target.value)
+                }
+                className="rounded-2xl border border-white/25 bg-sky-950/80 px-4 py-3 text-white outline-none"
+              >
+                <option value="">Select course</option>
+
+                {courses.map((course) => (
+                  <option key={course.id} value={course.id}>
+                    {course.code} — {course.name}
+                  </option>
+                ))}  
+              </select>
+
               <input
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                placeholder="New session title"
+                placeholder="Session title"
                 className="rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none placeholder:text-white/40"
               />
-              <button type="submit" className="rounded-2xl bg-white/90 px-5 py-3 font-semibold text-sky-950">
+
+              <label className="text-sm text-white/70">
+                Start time
+                <input
+                  type="datetime-local"
+                  value={sessionStart}
+                  onChange={(e) =>
+                    setSessionStart(e.target.value)
+                  }
+                  className="mt-1 w-full rounded-2xl border border-white/25 bg-sky-950/80 px-4 py-3 text-white outline-none"
+                />
+              </label>
+
+              <label className="text-sm text-white/70">
+                End time
+                <input
+                  type="datetime-local"
+                  value={sessionEnd}
+                  onChange={(e) =>
+                    setSessionEnd(e.target.value)
+                  }
+                  className="mt-1 w-full rounded-2xl border border-white/25 bg-sky-950/80 px-4 py-3 text-white outline-none"
+                />
+              </label> 
+
+              <button type="submit" disabled={creatingSession} className="rounded-2xl bg-white/90 px-5 py-3 font-semibold text-sky-950">
                 Create
               </button>
             </form>
-            {created && <p className="mt-2 text-sm text-emerald-200">Queued: {created}</p>}
+            {created && <p className="mt-2 text-sm text-emerald-200">Created: {created}</p>}
           </GlassCard>
         </section>
 
@@ -174,10 +538,10 @@ export function InstructorDashboard() {
                     </span>
                   </div>
                   <div className="mt-2 flex gap-2">
-                    <button type="button" className="rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-sky-950">
+                    <button type="button" onClick={() => void reviewCheckin(item.id, "approved")} disabled={reviewingId === item.id} className="rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-sky-950">
                       Approve
                     </button>
-                    <button type="button" className="rounded-lg border border-white/30 px-2.5 py-1 text-xs text-white">
+                    <button type="button" onClick={() => void reviewCheckin(item.id, "rejected")} disabled={reviewingId === item.id} className="rounded-lg border border-white/30 px-2.5 py-1 text-xs text-white">
                       Reject
                     </button>
                   </div>
@@ -203,7 +567,176 @@ export function InstructorDashboard() {
         <Kpi label="Approval rate" value={data ? `${Math.round(data.kpis.approvalRate * 100)}%` : "—"} />
         <Kpi label="Live sessions" value={String(data?.kpis.liveSessions ?? "—")} />
       </div>
+      <GlassCard className="p-5 sm:p-6">
+        <div className="mb-5">
+          <h2 className="font-display text-xl font-semibold text-white">
+            Attendance analytics
+          </h2>
 
+          <p className="mt-1 text-sm text-white/70">
+            Live breakdown of today&apos;s attendance records.
+          </p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+
+          <div className="rounded-2xl bg-white/10 p-4">
+            <p className="text-sm text-white/60">Approved</p>
+
+            <p className="mt-2 text-3xl font-semibold text-emerald-200">
+              {attendanceAnalytics.approved}
+            </p>
+
+            <p className="mt-1 text-xs text-white/50">
+              {attendanceAnalytics.total > 0
+                ? Math.round(
+                    (attendanceAnalytics.approved /
+                      attendanceAnalytics.total) *
+                      100,
+                  )
+                : 0}
+              % of records
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-white/10 p-4">
+            <p className="text-sm text-white/60">Flagged</p>
+
+            <p className="mt-2 text-3xl font-semibold text-amber-200">
+              {attendanceAnalytics.flagged}
+            </p>
+
+            <p className="mt-1 text-xs text-white/50">
+              Requires instructor review
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-white/10 p-4">
+            <p className="text-sm text-white/60">Rejected</p>
+
+            <p className="mt-2 text-3xl font-semibold text-rose-200">
+              {attendanceAnalytics.rejected}
+            </p>
+
+            <p className="mt-1 text-xs text-white/50">
+              Rejected attendance attempts
+            </p>
+          </div>
+        </div>
+        <div className="mt-6">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <h3 className="font-medium text-white">
+                Attendance status breakdown
+              </h3>
+
+              <p className="text-xs text-white/55">
+                Distribution of today&apos;s attendance records
+              </p>
+            </div>
+
+            <p className="text-xs text-white/55">
+              {attendanceAnalytics.total} total
+            </p>
+          </div>
+
+          {attendanceAnalytics.total === 0 ? (
+            <p className="rounded-2xl bg-white/10 px-4 py-6 text-center text-sm text-white/60">
+              No attendance records for today.
+            </p>
+          ) : (
+            <div className="space-y-4">
+
+              <AttendanceBar
+                label="Approved"
+                value={attendanceAnalytics.approved}
+                total={attendanceAnalytics.total}
+                barClass="bg-emerald-300"
+              />
+
+              <AttendanceBar
+                label="Flagged"
+                value={attendanceAnalytics.flagged}
+                total={attendanceAnalytics.total}
+                barClass="bg-amber-300"
+              />
+
+              <AttendanceBar
+                label="Rejected"
+                value={attendanceAnalytics.rejected}
+                total={attendanceAnalytics.total}
+                barClass="bg-rose-300"
+              />
+
+            </div>
+          )}
+        </div>
+      </GlassCard>
+      <GlassCard className="p-5 sm:p-6">
+        <div className="mb-5">
+          <h2 className="font-display text-xl font-semibold text-white">
+            Session attendance progress
+          </h2>
+
+          <p className="mt-1 text-sm text-white/70">
+            Check-in progress for today&apos;s sessions.
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          {(data?.todaySessions ?? []).map((session) => {
+            const percentage =
+              session.enrolled > 0
+                ? Math.min(
+                    100,
+                    Math.round(
+                      (session.checkins / session.enrolled) * 100,
+                    ),
+                  )
+                : 0;
+
+            return (
+              <div
+                key={session.id}
+                className="rounded-2xl bg-white/10 p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-white">
+                      {session.title}
+                    </p>
+
+                    <p className="text-xs text-white/60">
+                      {session.courseCode}
+                    </p>
+                  </div>
+
+                  <p className="text-sm font-semibold text-white">
+                    {percentage}%
+                  </p>
+                </div>
+
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/15">
+                  <div
+                    className="h-full rounded-full bg-emerald-300"
+                    style={{ width: `${percentage}%` }}
+                  />
+                </div>
+
+                <div className="mt-2 flex justify-between text-xs text-white/60">
+                  <span>
+                    {session.checkins}/{session.enrolled} checked in
+                  </span>
+
+                  <span>
+                    {session.flagged} flagged
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </GlassCard>
       <details className="group">
         <summary className="cursor-pointer list-none">
           <GlassCard className="p-5">
@@ -267,24 +800,229 @@ export function InstructorDashboard() {
           )}
         </GlassCard>
       </details>
+      <details className="group">
+        <summary className="cursor-pointer list-none">
+          <GlassCard className="p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-display text-xl font-semibold text-white">
+                  Audit log explorer
+                </h2>
+                <p className="mt-1 text-sm text-white/70">
+                  Review security and attendance events recorded by the system.
+                </p>
+              </div>
+
+              <span className="text-sm text-white/60 group-open:hidden">
+                Show
+              </span>
+
+              <span className="hidden text-sm text-white/60 group-open:inline">
+                Hide
+              </span>
+            </div>
+          </GlassCard>
+        </summary>
+
+        <GlassCard className="mt-3 p-5 sm:p-6">
+
+          <div className="flex flex-wrap gap-3">
+
+            <input
+              value={auditSearch}
+              onChange={(e) => setAuditSearch(e.target.value)}
+              placeholder="Search logs..."
+              className="min-w-[220px] flex-1 rounded-xl border border-white/25 bg-white/10 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40"
+            />
+
+            <select
+              value={auditAction}
+              onChange={(e) => setAuditAction(e.target.value)}
+              className="rounded-xl border border-white/25 bg-sky-950/80 px-3 py-2 text-sm text-white"
+            >
+              <option value="all">All actions</option>
+
+              {auditActions.map((action) => (
+                <option key={action} value={action}>
+                  {action}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={auditResult}
+              onChange={(e) => setAuditResult(e.target.value)}
+              className="rounded-xl border border-white/25 bg-sky-950/80 px-3 py-2 text-sm text-white"
+            >
+              <option value="all">All results</option>
+              <option value="success">Success</option>
+              <option value="failed">Failed</option>
+            </select>
+
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full text-left text-sm text-white/85">
+
+              <thead className="text-xs uppercase tracking-wide text-white/55">
+                <tr>
+                  <th className="py-2 pr-4">Time</th>
+                  <th className="py-2 pr-4">User</th>
+                  <th className="py-2 pr-4">Action</th>
+                  <th className="py-2 pr-4">Resource</th>
+                  <th className="py-2">Result</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {filteredAuditLogs.map((log) => (
+                  <tr key={log.id} className="border-t border-white/10">
+
+                    <td className="whitespace-nowrap py-3 pr-4">
+                      {new Date(log.timestamp).toLocaleString()}
+                    </td>
+
+                    <td className="py-3 pr-4">
+                      {log.userEmail}
+                    </td>
+
+                    <td className="py-3 pr-4 font-medium text-white">
+                      {log.action}
+                    </td>
+
+                    <td className="py-3 pr-4">
+                      <p>{log.resourceType}</p>
+                      <p className="text-xs text-white/50">
+                        {log.resourceId}
+                      </p>
+                    </td>
+
+                    <td className="py-3">
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                          log.success
+                            ? "bg-emerald-300/90 text-emerald-950"
+                            : "bg-rose-300/90 text-rose-950"
+                        }`}
+                      >
+                        {log.success ? "SUCCESS" : "FAILED"}
+                      </span>
+                    </td>
+
+                  </tr>
+                ))}
+              </tbody>
+
+            </table>
+
+            {filteredAuditLogs.length === 0 && (
+              <p className="py-6 text-center text-sm text-white/60">
+                No audit logs match these filters.
+              </p>
+            )}
+          </div>
+
+        </GlassCard>
+      </details>
     </div>
   );
 }
 
-function SessionRow({ session }: { session: InstructorSession }) {
+function SessionRow({
+  session,
+  updating,
+  onStatusChange,
+}: {
+  session: InstructorSession;
+  updating: boolean;
+  onStatusChange: (status: "active" | "closed") => void;
+}) {
   return (
     <li className="flex items-center justify-between gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3">
       <div>
-        <p className="font-medium text-white">{session.title}</p>
+        <p className="font-medium text-white">
+          {session.title}
+        </p>
+
         <p className="text-xs text-white/65">
-          {session.courseCode} · {session.checkins}/{session.enrolled} checked in
-          {session.flagged ? ` · ${session.flagged} flagged` : ""}
+          {session.courseCode} · {session.checkins}/
+          {session.enrolled} checked in
+          {session.flagged
+            ? ` · ${session.flagged} flagged`
+            : ""}
         </p>
       </div>
-      <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase ${statusClass(session.status)}`}>
-        {session.status}
-      </span>
+
+      <div className="flex items-center gap-2">
+        {session.status === "scheduled" && (
+          <button
+            type="button"
+            disabled={updating}
+            onClick={() => onStatusChange("active")}
+            className="rounded-lg bg-emerald-300 px-3 py-1 text-xs font-semibold text-emerald-950 disabled:opacity-50"
+          >
+            {updating ? "Updating..." : "Activate"}
+          </button>
+        )}
+
+        {session.status === "live" && (
+          <button
+            type="button"
+            disabled={updating}
+            onClick={() => onStatusChange("closed")}
+            className="rounded-lg bg-rose-300 px-3 py-1 text-xs font-semibold text-rose-950 disabled:opacity-50"
+          >
+            {updating ? "Updating..." : "Close"}
+          </button>
+        )}
+
+        <span
+          className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase ${statusClass(
+            session.status,
+          )}`}
+        >
+          {session.status}
+        </span>
+      </div>
     </li>
+  );
+}
+
+function AttendanceBar({
+  label,
+  value,
+  total,
+  barClass,
+}: {
+  label: string;
+  value: number;
+  total: number;
+  barClass: string;
+}) {
+  const percentage =
+    total > 0
+      ? Math.round((value / total) * 100)
+      : 0;
+
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between text-sm">
+        <span className="text-white/75">
+          {label}
+        </span>
+
+        <span className="font-medium text-white">
+          {value} ({percentage}%)
+        </span>
+      </div>
+
+      <div className="h-3 overflow-hidden rounded-full bg-white/15">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${barClass}`}
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+    </div>
   );
 }
 

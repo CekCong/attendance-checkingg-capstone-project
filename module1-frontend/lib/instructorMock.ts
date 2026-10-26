@@ -1,4 +1,4 @@
-import type { InstructorDashboardData } from "./instructorTypes";
+import type { InstructorDashboardData, AuditLogEntry } from "./instructorTypes";
 
 export function buildInstructorDashboard(): InstructorDashboardData {
   const extra = Math.floor(Date.now() / 30_000) % 4;
@@ -175,6 +175,69 @@ export function buildInstructorDashboard(): InstructorDashboardData {
     },
   ];
 
+  const auditLogs: AuditLogEntry[] = [
+    {
+      id: "audit-1",
+      userEmail: "instructor@saiv.local",
+      action: "login_success",
+      resourceType: "user",
+      resourceId: "instructor-1",
+      success: true,
+      timestamp: "2026-08-20T08:55:00.000Z",
+      details: {
+        method: "password",
+      },
+    },
+    {
+      id: "audit-2",
+      userEmail: "instructor@saiv.local",
+      action: "session_created",
+      resourceType: "session",
+      resourceId: "ses-cs101-l4",
+      success: true,
+      timestamp: "2026-08-20T09:00:00.000Z",
+      details: {
+        course: "CS101",
+      },
+    },
+    {
+      id: "audit-3",
+      userEmail: "alex.chen@e.ntu.edu.sg",
+      action: "checkin_flagged",
+      resourceType: "checkin",
+      resourceId: "chk-f1",
+      success: true,
+      timestamp: "2026-08-20T09:08:12.000Z",
+      details: {
+        reason: "Liveness retry",
+      },
+    },
+    {
+      id: "audit-4",
+      userEmail: "priya.shah@e.ntu.edu.sg",
+      action: "checkin_flagged",
+      resourceType: "checkin",
+      resourceId: "chk-f2",
+      success: true,
+      timestamp: "2026-08-20T09:11:40.000Z",
+      details: {
+        reason: "Geofence edge",
+      },
+    },
+    {
+      id: "audit-5",
+      userEmail: "student@e.ntu.edu.sg",
+      action: "login_failed",
+      resourceType: "user",
+      resourceId: "unknown",
+      success: false,
+      timestamp: "2026-08-20T10:14:03.000Z",
+      details: {
+        reason: "Invalid credentials",
+      },
+    },
+  ];
+
   const todayCheckins = todaySessions.reduce((sum, s) => sum + s.checkins, 0);
   const approved = records.filter((r) => r.status === "approved").length;
 
@@ -183,6 +246,7 @@ export function buildInstructorDashboard(): InstructorDashboardData {
     todaySessions,
     flagged,
     records,
+    auditLogs,
     kpis: {
       todayCheckins,
       flaggedPending: flagged.length,

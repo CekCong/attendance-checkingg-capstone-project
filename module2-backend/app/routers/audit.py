@@ -34,6 +34,8 @@ class AuditAction(str, Enum):
     data_exported = "data_exported"
     security_violation = "security_violation"
 
+# --- SQLAlchemy Model ---
+from ..models import AuditLogModel as AuditLog
 
 class AuditLogCreate(BaseModel):
     action: AuditAction
@@ -81,7 +83,7 @@ def get_audit_logs(
     action: Optional[AuditAction] = Query(None),
     resource_type: Optional[str] = Query(None),
     success: Optional[bool] = Query(None),
-    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+    _user: Dict[str, Any] = Depends(require_roles("instructor", "admin")),
     db: Session = Depends(get_db),
 ):
     query = db.query(AuditLogModel)
@@ -127,3 +129,14 @@ def create_audit_log(
     db.commit()
     db.refresh(audit_entry)
     return audit_entry
+
+@router.get("/summary")
+async def get_audit_summary(
+    days: int = 7,
+    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+):
+    return {
+        "period_days": days,
+        "total_logs": 0,
+        "by_action": {},
+    }

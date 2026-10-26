@@ -311,6 +311,7 @@ def get_flagged_checkins(
         "total": total,
     }
 
+
 # GET /checkins/my-checkins - Get current student's check-in history
 @router.get("/my-checkins", response_model=List[MyCheckinItem], status_code=status.HTTP_200_OK)
 def get_my_checkins(
@@ -348,6 +349,45 @@ def get_my_checkins(
             status=CheckinStatus(rec.status),
             checked_in_at=rec.checked_in_at,
             risk_score=rec.risk_score
+        )
+        for rec in records
+    ]
+
+# GET /checkins/session/{session_id} - Get all check-ins for a session
+@router.get("/session/{session_id}", response_model=List[CheckinListItem], status_code=status.HTTP_200_OK,)
+def get_session_checkins(
+    session_id: uuid.UUID,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.get("role") not in ["instructor", "ta", "admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Instructor or TA permissions required."
+        )
+
+    records = (
+        db.query(AttendanceRecord)
+        .join(AttendanceRecord.session)
+        .join(AttendanceRecord.student)
+        .filter(AttendanceRecord.session_id == str(session_id))
+        .order_by(AttendanceRecord.checked_in_at.desc())
+        .all()
+    )
+
+    return [
+        CheckinListItem(
+            id=rec.id,
+            session_id=rec.session_id,
+            session_name=rec.session.name if rec.session else "",
+            student_id=rec.student_id,
+            student_name=rec.student.full_name if rec.student else "",
+            student_email=rec.student.email if rec.student else "",
+            status=CheckinStatus(rec.status),
+            checked_in_at=rec.checked_in_at,
+            distance_from_venue_meters=rec.distance_from_venue_meters,
+            risk_score=rec.risk_score,
+            liveness_passed=rec.liveness_passed,
         )
         for rec in records
     ]

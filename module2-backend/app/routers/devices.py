@@ -85,6 +85,26 @@ def get_user_id_and_role(current_user: Any):
 
 
 # --- Endpoints ---
+@router.get("/", status_code=status.HTTP_200_OK)
+def list_all_devices(
+    current_user: Any = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List all registered devices. Admin only."""
+    _, user_role = get_user_id_and_role(current_user)
+
+    if user_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Admin permissions required."
+        )
+
+    devices = db.query(DeviceModel).all()
+
+    return {
+        "items": devices,
+        "total": len(devices),
+    }
 
 @router.get("/", status_code=status.HTTP_200_OK)
 def list_all_devices(
