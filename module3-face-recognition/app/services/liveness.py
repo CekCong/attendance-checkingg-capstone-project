@@ -14,8 +14,11 @@ EAR_THRESHOLD = 0.25
 FACE_MESH_MAX_FACES = 1
 FACE_MESH_MIN_CONFIDENCE = 0.5
 EXPECTED_LANDMARK_COUNT = 468
-GOOD_DEPTH_THRESHOLD = 0.05
-MODERATE_DEPTH_THRESHOLD = 0.02
+MIN_DEPTH_THRESHOLD = 0.01
+LOW_DEPTH_THRESHOLD = 0.05
+MEDIUM_DEPTH_THRESHOLD = 0.10
+HIGH_DEPTH_THRESHOLD = 0.15
+VERY_HIGH_DEPTH_THRESHOLD = 0.20
 LEFT_EYE_INDICES = (33, 160, 158, 133, 153, 144)
 RIGHT_EYE_INDICES = (362, 385, 387, 263, 373, 380)
 LEFT_FACE_EDGE_INDEX = 234
@@ -30,12 +33,12 @@ SMILE_INCREASE_RATIO = 1.08
 MOUTH_LEFT_INDEX = 61
 MOUTH_RIGHT_INDEX = 291
 
-LIVENESS_THRESHOLD = 0.60
+ACTIVE_LIVENESS_THRESHOLD = 0.60
+PASSIVE_LIVENESS_THRESHOLD = 0.85
 DEPTH_WEIGHT = 0.30
 MESH_WEIGHT = 0.25
 TEXTURE_WEIGHT = 0.25
 COLOR_WEIGHT = 0.20
-MIN_DEPTH = 0.01
 TARGET_TEXTURE_CONTRAST = 45.0
 TARGET_TEXTURE_EDGE_STRENGTH = 18.0
 TARGET_COLOR_VARIATION = 45.0
@@ -95,11 +98,10 @@ def analyze_face_mesh(image_array):
 
     nose_tip_z = float(landmarks[NOSE_TIP_INDEX].z)
 
-    depth = abs(nose_tip_z)
-
-    if depth >= GOOD_DEPTH_THRESHOLD:
+    forward_depth = -nose_tip_z
+    if forward_depth > HIGH_DEPTH_THRESHOLD:
         depth_quality = "good"
-    elif depth >= MODERATE_DEPTH_THRESHOLD:
+    elif forward_depth > LOW_DEPTH_THRESHOLD:
         depth_quality = "moderate"
     else:
         depth_quality = "poor"
@@ -235,9 +237,34 @@ def depth_score(mesh_result):
     if nose_tip_z is None:
         return 0.0
 
-    depth = abs(float(nose_tip_z))
-    score = (depth - MIN_DEPTH) / (GOOD_DEPTH_THRESHOLD - MIN_DEPTH)
-    return round(max(0.0, min(score, 1.0)), 4)
+    # MediaPipe uses negative z for points projecting towards the camera.
+    # Do not use abs(), because a positive z value is not evidence of the
+    # forward nose depth described by the API specification.
+    forward_depth = -float(nose_tip_z)
+    if forward_depth < MIN_DEPTH_THRESHOLD:
+        return 0.0
+    if forward_depth <= LOW_DEPTH_THRESHOLD:
+        return 0.10
+    if forward_depth <= MEDIUM_DEPTH_THRESHOLD:
+        return 0.25
+    if forward_depth <= HIGH_DEPTH_THRESHOLD:
+        return 0.50
+    if forward_depth <= VERY_HIGH_DEPTH_THRESHOLD:
+        return 0.75
+    return 1.0
+
+
+def mesh_score(mesh_result):
+    """Give full credit only for a complete mesh and strict partial credit otherwise."""
+    landmark_count = max(0, int(mesh_result.get("landmark_count", 0)))
+    if (
+        mesh_result.get("face_mesh_complete")
+        and landmark_count >= EXPECTED_LANDMARK_COUNT
+    ):
+        return 1.0
+
+    completion_ratio = min(landmark_count / EXPECTED_LANDMARK_COUNT, 1.0)
+    return round(completion_ratio * 0.75, 4)
 
 
 def passive_liveness_check(request: LivenessRequest):
@@ -259,7 +286,7 @@ def passive_liveness_check(request: LivenessRequest):
         return LivenessResponse(
             liveness_passed=False,
             liveness_score=0.0,
-            liveness_threshold=LIVENESS_THRESHOLD,
+            liveness_threshold=PASSIVE_LIVENESS_THRESHOLD,
             face_embedding_hash="",
             details={"error": "No face detected or multiple faces detected."}
         )
@@ -280,10 +307,7 @@ def passive_liveness_check(request: LivenessRequest):
         }
     landmarks = mesh_result.pop("landmarks", None)
     passive_depth_score = depth_score(mesh_result)
-    mesh_completeness_score = min(
-        mesh_result["landmark_count"] / EXPECTED_LANDMARK_COUNT,
-        1.0,
-    )
+    mesh_completeness_score = mesh_score(mesh_result)
     passive_texture_score = texture_score(image, face)
     passive_color_score = color_distribution_score(image, face)
 
@@ -296,8 +320,8 @@ def passive_liveness_check(request: LivenessRequest):
     )
     liveness_score = round(max(0.0, min(liveness_score, 1.0)), 4)
 
-    # 6. liveness_passed = (liveness_score >= 0.60)
-    liveness_passed = liveness_score >= LIVENESS_THRESHOLD
+    # 6. Passive liveness uses a stricter threshold than active challenges.
+    liveness_passed = liveness_score >= PASSIVE_LIVENESS_THRESHOLD
 
     # 7. Generate face embedding hash
     face_embedding = extract_face_embedding(image, face)
@@ -306,7 +330,7 @@ def passive_liveness_check(request: LivenessRequest):
         return LivenessResponse(
             liveness_passed=False,
             liveness_score=liveness_score,
-            liveness_threshold=LIVENESS_THRESHOLD,
+            liveness_threshold=PASSIVE_LIVENESS_THRESHOLD,
             face_embedding_hash="",
             details={"error": "Failed to extract face embedding."}
         )
@@ -316,7 +340,7 @@ def passive_liveness_check(request: LivenessRequest):
     return LivenessResponse(
         liveness_passed=liveness_passed,
         liveness_score=liveness_score,
-        liveness_threshold=LIVENESS_THRESHOLD,
+        liveness_threshold=PASSIVE_LIVENESS_THRESHOLD,
         face_embedding_hash=face_embedding_hash,
         details={
             "confidence_score": confidence_score,
@@ -431,7 +455,7 @@ def active_response(
         same_person
         and correct_person
         and action_detected
-        and action_score >= LIVENESS_THRESHOLD
+        and action_score >= ACTIVE_LIVENESS_THRESHOLD
     )
     response_details = {
         "challenge_type": challenge_type,
@@ -456,7 +480,7 @@ def active_response(
     return LivenessResponse(
         liveness_passed=passed,
         liveness_score=action_score if same_person and correct_person else 0.0,
-        liveness_threshold=LIVENESS_THRESHOLD,
+        liveness_threshold=ACTIVE_LIVENESS_THRESHOLD,
         face_embedding_hash=face_hash,
         details=response_details,
     )
@@ -586,7 +610,7 @@ def head_turn_liveness_check(request):
     head_turn_detected = (
         starts_centered
         and ends_centered
-        and head_turn_score >= LIVENESS_THRESHOLD
+        and head_turn_score >= ACTIVE_LIVENESS_THRESHOLD
     )
 
     return active_response(
@@ -651,7 +675,7 @@ def smile_liveness_check(request):
     smile_detected = (
         neutral_ratio > 0
         and returned_to_neutral
-        and smile_score >= LIVENESS_THRESHOLD
+        and smile_score >= ACTIVE_LIVENESS_THRESHOLD
     )
 
     return active_response(

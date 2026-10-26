@@ -3,17 +3,23 @@ import math
 import json
 import enum
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from sqlalchemy.orm import Session
 from ..security import get_current_user
+from ..rate_limit import client_ip
 from ..database import get_db as shared_get_db
-from ..models import CheckinModel, DeviceModel, SessionModel, UserModel as User
+from ..models import CheckinModel, DeviceModel, EnrollmentModel, SessionModel, UserModel as User
+from ..audit import add_audit_log
+from ..course_access import require_course_staff_access, staff_course_ids
+from ..device_challenge import DeviceChallengeStoreError, consume_device_challenge
+from ..retention import CHECKIN_RETENTION_DAYS
 from ..services.face_client import (
     FaceServiceError,
     assess_risk,
     check_liveness,
+    create_liveness_challenge,
     verify_face,
 )
 
@@ -60,9 +66,23 @@ class CheckinCreate(BaseModel):
     longitude: float
     location_accuracy_meters: Optional[float] = None
     device_fingerprint: str
-    liveness_challenge_response: Optional[str] = None
+    device_signature: Optional[str] = Field(None, max_length=4096)
+    device_challenge: Optional[str] = Field(None, max_length=256)
+    liveness_challenge_response: Optional[str | List[str]] = None
+    liveness_challenge_id: Optional[str] = None
+    liveness_challenge_type: Optional[Literal["passive", "blink", "head_turn", "smile"]] = None
     qr_code: Optional[str] = None
     face_image: Optional[str] = None  # Base64-encoded image for liveness check
+
+
+class LivenessChallengeCreate(BaseModel):
+    session_id: uuid.UUID
+
+
+class LivenessChallengeResponse(BaseModel):
+    challenge_id: str
+    challenge_type: Literal["blink", "head_turn", "smile"]
+    expires_in: int
 
 class RiskFactor(BaseModel):
     type: str
@@ -150,6 +170,10 @@ class FlaggedCheckinItem(BaseModel):
     def parse_risk_factors(cls, value):
         return json.loads(value) if isinstance(value, str) else value or []
 
+class FlaggedCheckinPaginatedResponse(BaseModel):
+    items: List[FlaggedCheckinItem]
+    total: int
+
 class AppealCreate(BaseModel):
     appeal_reason: str
 
@@ -177,8 +201,58 @@ class ReviewResponse(BaseModel):
 # --- Router ---
 router = APIRouter(prefix="/checkins", tags=["Check-ins"])
 
+
+@router.post("/liveness-challenge", response_model=LivenessChallengeResponse)
+async def request_liveness_challenge(
+    payload: LivenessChallengeCreate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Only students can request a liveness challenge.")
+
+    student_id = str(current_user.get("id"))
+    session_id = str(payload.session_id)
+    session_obj = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if session_obj.status != SessionStatus.active:
+        raise HTTPException(status_code=400, detail="Session is not currently active.")
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    opens_at = session_obj.checkin_opens_at.replace(tzinfo=None)
+    closes_at = session_obj.checkin_closes_at.replace(tzinfo=None)
+    if now < opens_at or now > closes_at:
+        raise HTTPException(status_code=400, detail="Check-in window is closed for this session.")
+
+    enrollment = db.query(EnrollmentModel).filter(
+        EnrollmentModel.student_id == student_id,
+        EnrollmentModel.course_id == session_obj.course_id,
+        EnrollmentModel.is_active.is_(True),
+    ).first()
+    if not enrollment:
+        raise HTTPException(status_code=403, detail="You are not actively enrolled in this course.")
+
+    existing = db.query(CheckinModel).filter(
+        CheckinModel.student_id == student_id,
+        CheckinModel.session_id == session_id,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Already checked in to this session.")
+
+    student = db.query(User).filter(User.id == student_id).first()
+    if not student or not student.camera_consent:
+        raise HTTPException(status_code=403, detail="Camera consent is required.")
+    if not student.face_enrolled or not student.face_embedding_hash:
+        raise HTTPException(status_code=400, detail="Face enrollment is required for active liveness.")
+
+    try:
+        return await create_liveness_challenge(student_id, session_id)
+    except FaceServiceError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+
 # GET /checkins/flagged - Get check-ins requiring review (flagged or appealed)
-@router.get("/flagged", status_code=status.HTTP_200_OK)
+@router.get("/flagged", response_model=FlaggedCheckinPaginatedResponse, status_code=status.HTTP_200_OK)
 def get_flagged_checkins(
     course_id: Optional[uuid.UUID] = Query(None, description="Filter by course"),
     session_id: Optional[uuid.UUID] = Query(None, description="Filter by session"),
@@ -198,35 +272,45 @@ def get_flagged_checkins(
         .join(AttendanceRecord.student)
         .filter(AttendanceRecord.status.in_([CheckinStatus.flagged.value, CheckinStatus.appealed.value]))
     )
+    if current_user.get("role") in {"instructor", "ta"}:
+        query = query.filter(SessionModel.course_id.in_(staff_course_ids(db, current_user)))
 
     if course_id:
+        if current_user.get("role") in {"instructor", "ta"}:
+            require_course_staff_access(db, current_user, str(course_id))
         query = query.filter(SessionModel.course_id == str(course_id))
     if session_id:
+        if current_user.get("role") in {"instructor", "ta"}:
+            requested_session = db.query(SessionModel).filter(
+                SessionModel.id == str(session_id)
+            ).first()
+            if requested_session:
+                require_course_staff_access(db, current_user, requested_session.course_id)
         query = query.filter(AttendanceRecord.session_id == str(session_id))
 
+    total = query.count()
     records = query.order_by(AttendanceRecord.checked_in_at.desc()).limit(limit).all()
 
-    items = [
-        FlaggedCheckinItem(
-            id=rec.id,
-            session_id=rec.session_id,
-            session_name=rec.session.name if rec.session else "",
-            student_id=rec.student_id,
-            student_name=rec.student.full_name if rec.student else "",
-            status=CheckinStatus(rec.status),
-            checked_in_at=rec.checked_in_at,
-            risk_score=rec.risk_score,
-            risk_factors=json.loads(rec.risk_factors) if rec.risk_factors else [],
-            appeal_reason=rec.appeal_reason,
-            appealed_at=rec.appealed_at
-        )
-        for rec in records
-    ]
-
     return {
-        "items": items,
-        "total": len(items),
+        "items": [
+            FlaggedCheckinItem(
+                id=rec.id,
+                session_id=rec.session_id,
+                session_name=rec.session.name if rec.session else "",
+                student_id=rec.student_id,
+                student_name=rec.student.full_name if rec.student else "",
+                status=CheckinStatus(rec.status),
+                checked_in_at=rec.checked_in_at,
+                risk_score=rec.risk_score,
+                risk_factors=json.loads(rec.risk_factors) if rec.risk_factors else [],
+                appeal_reason=rec.appeal_reason,
+                appealed_at=rec.appealed_at
+            )
+            for rec in records
+        ],
+        "total": total,
     }
+
 
 # GET /checkins/my-checkins - Get current student's check-in history
 @router.get("/my-checkins", response_model=List[MyCheckinItem], status_code=status.HTTP_200_OK)
@@ -333,6 +417,12 @@ def get_checkin_detail(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You do not have permission to view this check-in."
         )
+    if user_role in {"instructor", "ta"}:
+        session_obj = db.query(SessionModel).filter(
+            SessionModel.id == record.session_id
+        ).first()
+        if session_obj:
+            require_course_staff_access(db, current_user, session_obj.course_id)
 
     return record
 
@@ -341,6 +431,7 @@ def get_checkin_detail(
 def appeal_checkin(
     id: uuid.UUID,
     payload: AppealCreate,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -358,7 +449,6 @@ def appeal_checkin(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Check-in with ID '{id}' not found."
         )
-
     if record.student_id != student_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -393,6 +483,11 @@ def appeal_checkin(
     record.appeal_reason = payload.appeal_reason
     record.appealed_at = now
 
+    add_audit_log(
+        db, request, "checkin_appealed",
+        user_id=student_id, resource_type="checkin", resource_id=record.id,
+        details=f"session_id={record.session_id}",
+    )
     db.commit()
     db.refresh(record)
 
@@ -403,6 +498,7 @@ def appeal_checkin(
 def review_checkin(
     id: uuid.UUID,
     payload: ReviewCreate,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -419,6 +515,12 @@ def review_checkin(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Check-in with ID '{id}' not found."
         )
+    if reviewer_role in {"instructor", "ta"}:
+        session_obj = db.query(SessionModel).filter(
+            SessionModel.id == record.session_id
+        ).first()
+        if session_obj:
+            require_course_staff_access(db, current_user, session_obj.course_id)
 
     reviewer_id = str(current_user.get("id"))
     now = datetime.now(timezone.utc)
@@ -428,6 +530,21 @@ def review_checkin(
     record.reviewed_at = now
     record.review_notes = payload.review_notes
 
+    add_audit_log(
+        db, request, "checkin_reviewed",
+        user_id=reviewer_id, resource_type="checkin", resource_id=record.id,
+        details=f"status={payload.status.value}",
+    )
+    add_audit_log(
+        db,
+        request,
+        "checkin_approved" if payload.status == ReviewStatus.approved else "checkin_rejected",
+        user_id=reviewer_id,
+        resource_type="checkin",
+        resource_id=record.id,
+        details=f"manual_review=true; student_id={record.student_id}",
+        success=payload.status == ReviewStatus.approved,
+    )
     db.commit()
     db.refresh(record)
 
@@ -456,10 +573,22 @@ def list_checkins(
         )
 
     query = db.query(AttendanceRecord).join(AttendanceRecord.session).join(AttendanceRecord.student)
+    if current_user.get("role") == "instructor":
+        query = query.filter(
+            SessionModel.course_id.in_(staff_course_ids(db, current_user))
+        )
 
     if session_id:
+        if current_user.get("role") == "instructor":
+            requested_session = db.query(SessionModel).filter(
+                SessionModel.id == str(session_id)
+            ).first()
+            if requested_session:
+                require_course_staff_access(db, current_user, requested_session.course_id)
         query = query.filter(AttendanceRecord.session_id == str(session_id))
     if course_id:
+        if current_user.get("role") == "instructor":
+            require_course_staff_access(db, current_user, str(course_id))
         query = query.filter(SessionModel.course_id == str(course_id))
     if student_id:
         query = query.filter(AttendanceRecord.student_id == str(student_id))
@@ -525,6 +654,26 @@ async def create_checkin(
             detail=f"Session with ID '{payload.session_id}' not found."
         )
 
+    face_match_required = bool(
+        session_obj.require_face_match
+        or (session_obj.course and session_obj.course.require_face_recognition)
+    )
+
+    enrollment = (
+        db.query(EnrollmentModel)
+        .filter(
+            EnrollmentModel.student_id == student_id,
+            EnrollmentModel.course_id == session_obj.course_id,
+            EnrollmentModel.is_active.is_(True),
+        )
+        .first()
+    )
+    if not enrollment:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not actively enrolled in this course.",
+        )
+
     if session_obj.status != SessionStatus.active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -543,6 +692,19 @@ async def create_checkin(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Check-in window is closed for this session."
+        )
+
+    if not (1.15 <= payload.latitude <= 1.4833 and 103.60 <= payload.longitude <= 104.4167):
+        add_audit_log(
+            db, request, "security_violation",
+            user_id=student_id, resource_type="session", resource_id=session_id,
+            details="Check-in GPS coordinates outside Singapore",
+            success=False,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Check-ins are only allowed within Singapore."
         )
 
     existing_checkin = (
@@ -578,6 +740,7 @@ async def create_checkin(
     local_risk = 0.0
     distance_meters = None
     geofence_exceeded_critical = False
+    outside_singapore_ip = False
 
     if session_obj.venue_latitude is not None and session_obj.venue_longitude is not None:
         distance_meters = calculate_haversine_distance(
@@ -620,13 +783,48 @@ async def create_checkin(
         )
         .first()
     )
+    attestation_supplied = (
+        payload.device_signature is not None
+        or payload.device_challenge is not None
+    )
+    if attestation_supplied:
+        if not payload.device_signature or not payload.device_challenge:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Both device signature and challenge are required.",
+            )
+        if device is None or not device.public_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Device attestation requires a registered public key.",
+            )
+        try:
+            challenge_valid = consume_device_challenge(
+                payload.device_challenge,
+                student_id,
+                device.id,
+                session_id,
+            )
+        except DeviceChallengeStoreError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+        if not challenge_valid:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Device challenge is invalid, expired, or already used.",
+            )
 
     if payload.liveness_challenge_response:
         try:
             liveness_result = await check_liveness(
                 payload.liveness_challenge_response,
-                challenge_type="passive",
+                challenge_type=payload.liveness_challenge_type or "passive",
                 reference_template_hash=student.face_embedding_hash,
+                challenge_id=payload.liveness_challenge_id,
+                user_id=student_id,
+                session_id=session_id,
             )
             liveness_passed = bool(liveness_result["liveness_passed"])
             liveness_score = float(liveness_result["liveness_score"])
@@ -641,14 +839,19 @@ async def create_checkin(
                 detail="Face recognition service returned an invalid liveness response",
             ) from exc
     elif session_obj.require_liveness_check:
-        liveness_passed = False
         liveness_score = 0.0
+        risk_factors.append({
+            "type": "liveness_missing",
+            "severity": "high",
+            "weight": 1.0,
+        })
+        local_risk = 1.0
 
     if session_obj.require_liveness_check and liveness_passed is False:
         risk_factors.append({"type": "liveness_failed", "severity": "high", "weight": 1.0})
         local_risk = 1.0
 
-    if session_obj.require_face_match:
+    if face_match_required:
         if not payload.liveness_challenge_response:
             face_match_passed = False
             face_match_score = 0.0
@@ -660,7 +863,14 @@ async def create_checkin(
         else:
             try:
                 face_result = await verify_face(
-                    payload.liveness_challenge_response,
+                    (
+                        payload.face_image
+                        or (
+                            payload.liveness_challenge_response[0]
+                            if isinstance(payload.liveness_challenge_response, list)
+                            else payload.liveness_challenge_response
+                        )
+                    ),
                     student.face_embedding_hash,
                 )
                 face_match_passed = bool(face_result["match_passed"])
@@ -696,17 +906,21 @@ async def create_checkin(
                 face_match_score=(
                     face_match_score
                     if face_match_score is not None
-                    else (0.0 if session_obj.require_face_match else 1.0)
+                    else (0.0 if face_match_required else 1.0)
                 ),
+                device_signature=payload.device_signature,
                 device_public_key=device.public_key if device else None,
-                ip_address=request.client.host if request.client else None,
+                device_challenge=payload.device_challenge,
+                ip_address=client_ip(request),
                 user_agent=request.headers.get("user-agent"),
                 latitude=payload.latitude,
                 longitude=payload.longitude,
                 accuracy=payload.location_accuracy_meters,
             )
             module3_risk = float(risk_result["risk_score"])
-            for signal_name, signal_risk in risk_result.get("signal_breakdown", {}).items():
+            signal_breakdown = risk_result.get("signal_breakdown", {})
+            outside_singapore_ip = float(signal_breakdown.get("ip_country", 0.0)) >= 1.0
+            for signal_name, signal_risk in signal_breakdown.items():
                 signal_risk = float(signal_risk)
                 if signal_risk <= 0:
                     continue
@@ -742,7 +956,12 @@ async def create_checkin(
 
     total_risk = round(min(max(local_risk, module3_risk), 1.0), 4)
 
-    if geofence_exceeded_critical:
+    verification_failed = (
+        (session_obj.require_liveness_check and liveness_passed is False)
+        or (face_match_required and face_match_passed is False)
+    )
+
+    if geofence_exceeded_critical or outside_singapore_ip or verification_failed:
         checkin_status = CheckinStatus.rejected
     else:
         threshold = session_obj.risk_threshold or 0.50
@@ -765,7 +984,8 @@ async def create_checkin(
         liveness_passed=liveness_passed,
         liveness_score=liveness_score,
         liveness_challenge_type=(
-            "passive" if payload.liveness_challenge_response else None
+            (payload.liveness_challenge_type or "passive")
+            if payload.liveness_challenge_response else None
         ),
         face_match_passed=face_match_passed,
         face_match_score=face_match_score,
@@ -773,9 +993,43 @@ async def create_checkin(
         risk_score=total_risk,
         risk_factors=json.dumps(risk_factors),
         qr_code_verified=bool(session_obj.qr_code_secret),
+        scheduled_deletion_at=now + timedelta(days=CHECKIN_RETENTION_DAYS),
     )
 
     db.add(new_record)
+    add_audit_log(
+        db,
+        request,
+        "checkin_attempted",
+        user_id=student_id,
+        resource_type="checkin",
+        resource_id=new_record.id,
+        details=(
+            f"session_id={session_id}; status={checkin_status.value}; "
+            f"risk_score={total_risk}; latitude={payload.latitude}; longitude={payload.longitude}"
+        ),
+        success=checkin_status != CheckinStatus.rejected,
+    )
+    if checkin_status in (
+        CheckinStatus.approved, CheckinStatus.flagged, CheckinStatus.rejected
+    ):
+        add_audit_log(
+            db,
+            request,
+            f"checkin_{checkin_status.value}",
+            user_id=student_id,
+            resource_type="checkin",
+            resource_id=new_record.id,
+            details=f"session_id={session_id}; risk_score={total_risk}",
+            success=checkin_status == CheckinStatus.approved,
+        )
+    if checkin_status == CheckinStatus.rejected:
+        add_audit_log(
+            db, request, "security_violation",
+            user_id=student_id, resource_type="checkin", resource_id=new_record.id,
+            details=f"session_id={session_id}; factors={json.dumps(risk_factors)}",
+            success=False,
+        )
     db.commit()
     db.refresh(new_record)
 

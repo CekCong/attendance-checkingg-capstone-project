@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional, Any, List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -10,7 +10,13 @@ import os
 from dotenv import load_dotenv
 from ..database import get_db as shared_get_db
 from ..models import DeviceModel
-from ..security import get_current_user
+from ..security import get_current_user, require_roles
+from ..audit import add_audit_log
+from ..device_challenge import (
+    DEVICE_CHALLENGE_TTL_SECONDS,
+    DeviceChallengeStoreError,
+    create_device_challenge,
+)
 
 load_dotenv()
 
@@ -41,6 +47,14 @@ class DeviceUpdateRequest(BaseModel):
     device_name: Optional[str] = Field(None, max_length=255)
     is_trusted: Optional[bool] = Field(None, description="Admin only")
     is_active: Optional[bool] = Field(None, description="Deactivate device")
+
+class DeviceChallengeRequest(BaseModel):
+    device_fingerprint: str = Field(..., max_length=64)
+    session_id: uuid.UUID
+
+class DeviceChallengeResponse(BaseModel):
+    challenge: str
+    expires_in: int
 
 class DeviceResponse(BaseModel):
     id: str
@@ -92,10 +106,20 @@ def list_all_devices(
         "total": len(devices),
     }
 
+@router.get("/", status_code=status.HTTP_200_OK)
+def list_all_devices(
+    _current_user: Any = Depends(require_roles("admin")),
+    db: Session = Depends(get_db)
+):
+    """List all registered devices. Requires admin role."""
+    devices = db.query(DeviceModel).all()
+    return {"items": devices, "total": len(devices)}
+
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=DeviceResponse)
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=DeviceResponse)
 def register_device(
     payload: DeviceRegisterRequest,
+    request: Request,
     current_user: Any = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -124,6 +148,15 @@ def register_device(
     )
 
     db.add(new_device)
+    add_audit_log(
+        db,
+        request,
+        "device_registered",
+        user_id=user_id,
+        resource_type="device",
+        resource_id=new_device.id,
+        details=f"platform={payload.platform or 'unknown'}",
+    )
     db.commit()
     db.refresh(new_device)
     return new_device
@@ -138,6 +171,47 @@ def list_my_devices(
     user_id, _ = get_user_id_and_role(current_user)
     devices = db.query(DeviceModel).filter(DeviceModel.user_id == user_id).all()
     return devices
+
+
+@router.post("/challenge", response_model=DeviceChallengeResponse)
+def issue_device_challenge(
+    payload: DeviceChallengeRequest,
+    current_user: Any = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Issue a one-time challenge for a registered device to sign."""
+    user_id, _ = get_user_id_and_role(current_user)
+    device = db.query(DeviceModel).filter(
+        DeviceModel.device_fingerprint == payload.device_fingerprint,
+        DeviceModel.user_id == user_id,
+        DeviceModel.is_active.is_(True),
+    ).first()
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active registered device not found.",
+        )
+    if not device.public_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The registered device does not have a public key.",
+        )
+
+    try:
+        challenge = create_device_challenge(
+            user_id,
+            device.id,
+            str(payload.session_id),
+        )
+    except DeviceChallengeStoreError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    return {
+        "challenge": challenge,
+        "expires_in": DEVICE_CHALLENGE_TTL_SECONDS,
+    }
 
 
 @router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)

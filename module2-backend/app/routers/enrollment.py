@@ -2,13 +2,15 @@ from sqlalchemy import or_
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, func, create_engine
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, Session, relationship, sessionmaker
 from ..security import get_current_user
+from ..course_access import require_course_staff_access
 from ..database import get_db as shared_get_db
+from ..audit import add_audit_log
 import os
 from dotenv import load_dotenv
 
@@ -101,6 +103,7 @@ router = APIRouter(prefix="/enrollments", tags=["Enrollments"])
 @router.post("/", response_model=StudentEnrollmentResponse, status_code=status.HTTP_201_CREATED)
 def create_enrollment(
     payload: EnrollmentCreate,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -125,6 +128,8 @@ def create_enrollment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Student or course not found."
         )
+    if user_role == "instructor":
+        require_course_staff_access(db, current_user, course_id)
 
     existing_enrollment = (
         db.query(Enrollment)
@@ -148,6 +153,11 @@ def create_enrollment(
         is_active=True
     )
     db.add(new_enrollment)
+    add_audit_log(
+        db, request, "enrollment_added",
+        user_id=str(current_user.get("id")), resource_type="enrollment", resource_id=new_enrollment.id,
+        details=f"course_id={course_id}; student_id={student_id}",
+    )
     db.commit()
     db.refresh(new_enrollment)
 
@@ -162,9 +172,10 @@ def create_enrollment(
         is_active=new_enrollment.is_active
     )
 
-router.post("/bulk", response_model=BulkEnrollmentResponse, status_code=status.HTTP_200_OK)
+@router.post("/bulk", response_model=BulkEnrollmentResponse, status_code=status.HTTP_200_OK)
 def bulk_enroll_students(
     payload: BulkEnrollmentRequest,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -187,6 +198,8 @@ def bulk_enroll_students(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Course with ID '{payload.course_id}' not found."
         )
+    if user_role == "instructor":
+        require_course_staff_access(db, current_user, course_id)
 
     enrolled_count = 0
     already_enrolled_count = 0
@@ -212,6 +225,11 @@ def bulk_enroll_students(
                     hashed_password="PENDING_PASSWORD_RESET"  # Placeholder for newly created placeholder accounts
                 )
                 db.add(student)
+                add_audit_log(
+                    db, request, "user_created",
+                    user_id=str(current_user.get("id")), resource_type="user", resource_id=student.id,
+                    details="Created by bulk enrollment",
+                )
                 db.commit()
                 db.refresh(student)
                 created_count += 1
@@ -233,6 +251,11 @@ def bulk_enroll_students(
         if existing_enrollment:
             if not existing_enrollment.is_active:
                 existing_enrollment.is_active = True
+                add_audit_log(
+                    db, request, "enrollment_added",
+                    user_id=str(current_user.get("id")), resource_type="enrollment", resource_id=existing_enrollment.id,
+                    details=f"course_id={course_id}; student_id={student.id}; reactivated=true",
+                )
                 db.commit()
                 enrolled_count += 1
                 details.append(BulkEnrollmentDetail(email=email, status="enrolled"))
@@ -248,6 +271,11 @@ def bulk_enroll_students(
                 is_active=True
             )
             db.add(new_enrollment)
+            add_audit_log(
+                db, request, "enrollment_added",
+                user_id=str(current_user.get("id")), resource_type="enrollment", resource_id=new_enrollment.id,
+                details=f"course_id={course_id}; student_id={student.id}",
+            )
             db.commit()
             enrolled_count += 1
             details.append(BulkEnrollmentDetail(email=email, status="enrolled"))
@@ -340,9 +368,11 @@ def get_course_enrollments(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Course with ID '{course_id}' not found."
         )
+    if current_user.get("role") in {"instructor", "ta"}:
+        require_course_staff_access(db, current_user, course_id_str)
 
     query = (
-        db.query(Enrollment)
+        db.query(Enrollment, User)
         .join(User, Enrollment.student_id == User.id)
         .filter(Enrollment.course_id == course_id_str)
     )
@@ -364,14 +394,14 @@ def get_course_enrollments(
     students_data = [
         EnrolledStudentDetail(
             id=enr.id,
-            student_id=enr.student.id,
-            student_email=enr.student.email,
-            student_name=enr.student.full_name,
+            student_id=student.id,
+            student_email=student.email,
+            student_name=student.full_name,
             enrolled_at=enr.enrolled_at,
             is_active=enr.is_active,
-            face_enrolled=getattr(enr.student, "face_enrolled", False)
+            face_enrolled=student.face_enrolled
         )
-        for enr in enrollments if getattr(enr, "student", None)
+        for enr, student in enrollments
     ]
 
     return CourseEnrollmentResponse(
@@ -384,6 +414,7 @@ def get_course_enrollments(
 @router.delete("/{enrollment_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_enrollment(
     enrollment_id: uuid.UUID,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -415,7 +446,13 @@ def delete_enrollment(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials."
             )
+        require_course_staff_access(db, current_user, enrollment.course_id)
 
+    add_audit_log(
+        db, request, "enrollment_removed",
+        user_id=str(current_user.get("id")), resource_type="enrollment", resource_id=enrollment.id,
+        details=f"course_id={enrollment.course_id}; student_id={enrollment.student_id}",
+    )
     db.delete(enrollment)
     db.commit()
 

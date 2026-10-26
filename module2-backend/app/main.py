@@ -50,6 +50,7 @@ Statistics
 
 Devices
 - POST /devices/register
+- POST /devices/challenge
 - GET /devices/my-devices
 - DELETE /devices/{device_id}
 - PATCH /devices/{device_id}
@@ -88,9 +89,14 @@ from prometheus_client import (
     Histogram,
     generate_latest,
 )
-from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+import logging
+import os
+from contextlib import asynccontextmanager, suppress
 
-from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+
 from .routers import (
     admin,
     audit,
@@ -99,20 +105,55 @@ from .routers import (
     courses,
     devices,
     enrollment,
+    export,
     observability,
     rbac_stubs,
     sessions,
+    stats,
     users,
 )
-from .database import engine, Base
+from .database import engine, Base, SessionLocal
 from . import models
+from .retention import cleanup_expired_checkins
+
+logger = logging.getLogger(__name__)
+
+
+def _ensure_audit_action_values() -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as connection:
+        for action in models.AUDIT_ACTION_VALUES:
+            connection.execute(text(
+                f"ALTER TYPE audit_action_enum ADD VALUE IF NOT EXISTS '{action}'"
+            ))
+
+
+async def _retention_cleanup_worker() -> None:
+    interval = max(int(os.getenv("RETENTION_CLEANUP_INTERVAL_SECONDS", "3600")), 60)
+    while True:
+        db = SessionLocal()
+        try:
+            cleanup_expired_checkins(db)
+        except Exception:
+            db.rollback()
+            logger.exception("Check-in retention cleanup failed")
+        finally:
+            db.close()
+        await asyncio.sleep(interval)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup: Initialize database schema ---
     Base.metadata.create_all(bind=engine)
-    yield
-    # --- Shutdown: Clean up resources if needed ---
+    _ensure_audit_action_values()
+    cleanup_task = asyncio.create_task(_retention_cleanup_worker())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
 
 
 app = FastAPI(
@@ -188,6 +229,8 @@ app.include_router(checkins.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(observability.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
+app.include_router(stats.router, prefix="/api/v1")
+app.include_router(export.router, prefix="/api/v1")
 app.include_router(rbac_stubs.router, prefix="/api/v1")
 
 

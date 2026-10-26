@@ -75,6 +75,7 @@ async def root():
             "/face/enroll",
             "/face/verify",
             "/face/match",
+            "/liveness/challenge",
             "/liveness/check",
             "/risk/assess",
         ]

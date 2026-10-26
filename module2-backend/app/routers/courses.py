@@ -8,8 +8,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 import os
 from dotenv import load_dotenv
 from ..models import CourseModel as Course, UserModel as User, SessionModel
+from ..course_access import require_course_staff_access, staff_course_ids
 
-from app.security import get_current_user, require_roles
+from app.security import get_current_user, get_optional_current_user, require_roles
 
 # 1: Database Setup ---
 load_dotenv()
@@ -120,19 +121,15 @@ def list_courses(
     instructor_id: Optional[uuid.UUID] = Query(None, description="Filter by instructor (admin only)"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    List courses with optional filters. **Requires auth.**
+    List courses with optional filters. Authentication is optional.
     """
-    if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials."
-        )
-
     query = db.query(Course)
+    if current_user and current_user.get("role") in {"instructor", "ta"}:
+        query = query.filter(Course.id.in_(staff_course_ids(db, current_user)))
 
     if is_active is not None:
         query = query.filter(Course.is_active == is_active)
@@ -141,7 +138,7 @@ def list_courses(
         query = query.filter(Course.semester == semester)
 
     if instructor_id:
-        if current_user.get("role") != "admin":
+        if not current_user or current_user.get("role") != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Filtering by instructor_id is restricted to administrators."
@@ -216,10 +213,10 @@ def create_course(
     # Verify instructor exists if provided
     if payload.instructor_id:
         instructor = db.query(User).filter(User.id == str(payload.instructor_id)).first()
-        if not instructor:
+        if not instructor or instructor.role != "instructor":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Instructor with ID '{payload.instructor_id}' not found."
+                detail=f"Valid instructor with ID '{payload.instructor_id}' not found."
             )
 
     # Extract fields excluding instructor_id since Course doesn't store it directly
@@ -233,7 +230,7 @@ def create_course(
     db.add(course)
 
     try:
-        db.commit()
+        db.flush()
         db.refresh(course)
 
         # If an instructor was provided, optionally create a default session linking them
@@ -250,7 +247,9 @@ def create_course(
                 status="scheduled"
             )
             db.add(default_session)
-            db.commit()
+
+        db.commit()
+        db.refresh(course)
 
         return course
     except Exception as e:
@@ -277,6 +276,8 @@ def get_course_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Course with ID '{course_id}' not found."
         )
+    if _current_user.get("role") in {"instructor", "ta"}:
+        require_course_staff_access(db, _current_user, course_id)
 
     # Fetch associated instructor via SessionModel if needed
     session_instructor = (
@@ -293,6 +294,7 @@ def get_course_details(
         id=course.id,
         code=course.code,
         name=course.name,
+        description=course.description,
         semester=course.semester,
         instructor_id=inst_id,
         instructor_name=inst_name,
@@ -300,6 +302,8 @@ def get_course_details(
         venue_latitude=course.venue_latitude,
         venue_longitude=course.venue_longitude,
         geofence_radius_meters=course.geofence_radius_meters,
+        require_face_recognition=course.require_face_recognition,
+        require_device_binding=course.require_device_binding,
         risk_threshold=course.risk_threshold,
         is_active=course.is_active,
         created_at=course.created_at,
@@ -369,6 +373,7 @@ def update_course_full_or_partial(
             id=course.id,
             code=course.code,
             name=course.name,
+            description=course.description,
             semester=course.semester,
             instructor_id=inst_id,
             instructor_name=inst_name,
@@ -376,9 +381,12 @@ def update_course_full_or_partial(
             venue_latitude=course.venue_latitude,
             venue_longitude=course.venue_longitude,
             geofence_radius_meters=course.geofence_radius_meters,
+            require_face_recognition=course.require_face_recognition,
+            require_device_binding=course.require_device_binding,
             risk_threshold=course.risk_threshold,
             is_active=course.is_active,
-            created_at=course.created_at
+            created_at=course.created_at,
+            updated_at=course.updated_at,
         )
     except Exception as e:
         db.rollback()

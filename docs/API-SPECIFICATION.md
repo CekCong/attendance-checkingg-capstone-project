@@ -12,6 +12,8 @@ All protected endpoints require JWT bearer token:
 Authorization: Bearer <access_token>
 ```
 
+The access token identifies the account, but the current user record in the database is authoritative for account status and role authorization. Each protected request checks that the user still exists and is active, and uses the current database role; deleted or disabled users cannot continue using previously issued access tokens.
+
 ### Role-Based Access Control
 
 | Role | Description | Permissions |
@@ -246,7 +248,8 @@ const response = await fetch('/api/v1/users/me/face/enroll', {
 ### Courses
 
 #### GET /courses/
-List courses with optional filters. **Requires auth.**
+List courses with optional filters. **Public endpoint; authentication is optional.**
+Authenticated instructors and TAs see only courses they are assigned to. Filtering by `instructor_id` remains admin-only.
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -802,8 +805,8 @@ Get attendance statistics for a course. **Requires auth (instructor for course, 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `start_date` | ISO8601 | semester start | Start of date range |
-| `end_date` | ISO8601 | today | End of date range |
+| `start_date` | ISO8601 | No lower bound | Include sessions scheduled on or after this date |
+| `end_date` | ISO8601 | No upper bound | Include sessions scheduled on or before this date |
 
 **Response:** `200 OK`
 ```json
@@ -1519,6 +1522,7 @@ Reactivate a user account. **Requires auth (admin only).**
 Bulk create users. **Requires auth (admin only).**
 
 Designed for stress testing scenarios where many users need to be created quickly.
+Email addresses are stored in lowercase to match login behavior, and duplicates are rejected without regard to case.
 
 **Request:**
 ```json

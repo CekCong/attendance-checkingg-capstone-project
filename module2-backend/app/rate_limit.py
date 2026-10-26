@@ -46,6 +46,11 @@ def _get_redis():
     return _redis
 
 
+def get_redis_client():
+    """Return the shared Redis client, or None when Redis is unavailable."""
+    return _get_redis()
+
+
 def check_rate_limit(key: str, limit: int, window: int) -> Tuple[bool, int]:
     """
     Return (allowed, remaining). Increments the counter when allowed.

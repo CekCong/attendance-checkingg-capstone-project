@@ -74,9 +74,12 @@ async def enroll_face(
 
 
 async def check_liveness(
-    image: str,
+    image: str | list[str],
     challenge_type: str = "passive",
     reference_template_hash: Optional[str] = None,
+    challenge_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "challenge_response": image,
@@ -84,7 +87,21 @@ async def check_liveness(
     }
     if reference_template_hash:
         payload["reference_template_hash"] = reference_template_hash
-    return await _post("/liveness/check", payload, timeout=5.0)
+    if challenge_id:
+        payload.update({
+            "challenge_id": challenge_id,
+            "user_id": user_id,
+            "session_id": session_id,
+        })
+    return await _post("/liveness/check", payload, timeout=60.0)
+
+
+async def create_liveness_challenge(user_id: str, session_id: str) -> Dict[str, Any]:
+    return await _post(
+        "/liveness/challenge",
+        {"user_id": user_id, "session_id": session_id},
+        timeout=5.0,
+    )
 
 
 async def verify_face(image: str, reference_template_hash: str) -> Dict[str, Any]:
@@ -102,25 +119,29 @@ async def assess_risk(
     *,
     liveness_score: float,
     face_match_score: float,
+    device_signature: Optional[str],
     device_public_key: Optional[str],
+    device_challenge: Optional[str],
     ip_address: Optional[str],
     user_agent: Optional[str],
     latitude: float,
     longitude: float,
-    accuracy: float,
+    accuracy: Optional[float],
 ) -> Dict[str, Any]:
     return await _post(
         "/risk/assess",
         {
             "liveness_score": liveness_score,
             "face_match_score": face_match_score,
+            "device_signature": device_signature,
             "device_public_key": device_public_key,
+            "device_challenge": device_challenge,
             "ip_address": ip_address,
             "user_agent": user_agent,
             "geolocation": {
                 "latitude": latitude,
                 "longitude": longitude,
-                "accuracy": accuracy,
+                "accuracy": accuracy if accuracy is not None else 5000.0,
             },
         },
         timeout=5.0,
