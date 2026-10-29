@@ -4,6 +4,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 ENV INSIGHTFACE_HOME=/app/.insightface
+ENV MEDIAPIPE_MODEL_DIR=/app/models/mediapipe
 ENV CORS_ALLOWED_ORIGINS=http://localhost:3000
 
 # Install system dependencies for OpenCV and InsightFace
@@ -18,7 +19,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN --mount=type=secret,id=proxy_ca \
     if [ -s /run/secrets/proxy_ca ]; then export PIP_CERT=/run/secrets/proxy_ca; fi; \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir --require-hashes -r requirements.txt
 
 # Download the ArcFace model during the image build so the service does not
 # depend on network access when handling its first request.
@@ -28,6 +29,10 @@ RUN --mount=type=secret,id=proxy_ca \
 
 # Copy application code
 COPY . .
+
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -s /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
+    python -m app.prepare_models
 
 # Expose port
 EXPOSE 8001

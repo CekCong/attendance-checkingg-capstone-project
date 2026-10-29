@@ -1,5 +1,8 @@
 # Stage 5 validation — 30 October 2026 (Singapore)
 
+Historical Stage 5 evidence. See [Stage 6 checkpoint](STAGE6-DEPENDENCIES-QR.md) for
+updated dependency audits, implemented QR scanning and the pending MediaPipe migration.
+
 Stage 5 completes the dashboard/reporting and offline implementation and validates
 the application stack locally. This is **not production release approval**: the
 Python dependency audit, real-device biometric acceptance and infrastructure

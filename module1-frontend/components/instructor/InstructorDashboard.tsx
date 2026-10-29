@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { SessionQrCode } from "./SessionQrCode";
 import { GlassCard } from "@/components/check-in/GlassCard";
 import {
   downloadTextFile,
@@ -457,14 +458,16 @@ export function InstructorDashboard() {
             </div>
             <ul className="mt-4 space-y-3">
             {(data?.todaySessions ?? []).map((session) => (
+              <li key={session.id}>
               <SessionRow
-                key={session.id}
                 session={session}
                 updating={updatingSessionId === session.id}
                 onStatusChange={(status) =>
                   void changeSessionStatus(session.id, status)
                 }
               />
+              {session.status === "live" && accessToken && <SessionQrCode sessionId={session.id} token={accessToken} />}
+              </li>
             ))}
             </ul>
             <form
@@ -956,7 +959,7 @@ function SessionRow({
   onStatusChange: (status: "active" | "closed") => void;
 }) {
   return (
-    <li className="flex items-center justify-between gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3">
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3">
       <div>
         <p className="font-medium text-white">
           {session.title}
@@ -1002,7 +1005,7 @@ function SessionRow({
           {session.status}
         </span>
       </div>
-    </li>
+    </div>
   );
 }
 

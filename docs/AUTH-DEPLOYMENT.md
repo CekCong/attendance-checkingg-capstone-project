@@ -106,3 +106,22 @@ It creates test users and audit events. Run against a disposable development sta
 For this HTTPX test use Next development on HTTP, or a production server over HTTPS:
 HTTPX does not implement browsers' Secure-cookie exception for HTTP localhost.
 The Chromium account test also runs against the production build on localhost.
+
+## Stage 6 dependency checkpoint
+
+The backend now uses PyJWT with HS256 and mandatory subject/issued-at/expiry/type/
+authentication-version claims. Existing valid signed tokens remain compatible;
+roles and revocation still come from the database. Runtime/test dependencies are
+separated and hash-locked for Python 3.11. Use a clean environment so removed
+legacy packages do not remain installed.
+
+Session QR issuance is available to assigned instructors/admins at
+`POST /api/v1/sessions/{session_id}/qr-code`; successful responses include the
+opaque manual code, versioned JSON payload and UTC expiry. They inherit the API's
+`Cache-Control: no-store`. A new code enables required-code verification and rotates
+any earlier one; it does not bypass enrollment, consent, device or liveness checks.
+
+The new MediaPipe runtime requires versioned official model downloads, which the
+current cloud proxy blocks. The environment draft adds `storage.googleapis.com`;
+model and Docker acceptance remain pending. See [Stage 6 status and commands](STAGE6-DEPENDENCIES-QR.md)
+before restarting the retained Stage 5 face process or building the new face image.

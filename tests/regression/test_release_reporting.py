@@ -128,12 +128,8 @@ def test_course_export_retains_recorded_results_after_enrollment_dropped(reports
 def test_overview_uses_singapore_calendar_day(reports, monkeypatch):
     from datetime import timezone
     http, db, _, teacher, _, _, _, rows = reports
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            value = datetime(2026, 10, 29, 18, tzinfo=timezone.utc)
-            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
-    monkeypatch.setattr(stats, 'datetime', Clock)
+    # Patch the clock, not the datetime type used by FastAPI's lazy annotations.
+    monkeypatch.setattr(stats, '_utc_now', lambda: datetime(2026, 10, 29, 18))
     for _, checkin in rows:
         checkin.checked_in_at = datetime(2026, 10, 29, 15, 59)
     rows[0][1].checked_in_at = datetime(2026, 10, 29, 16, 30)

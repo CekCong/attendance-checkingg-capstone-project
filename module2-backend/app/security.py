@@ -8,7 +8,8 @@ from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 from sqlalchemy.orm import Session
 
 from .database import get_db
@@ -54,8 +55,11 @@ def create_refresh_token(user: Dict[str, Any]) -> str:
 
 def decode_token(token: str, expected_type: Optional[str] = None) -> Dict[str, Any]:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError as exc:
+        payload = jwt.decode(
+            token, SECRET_KEY, algorithms=[ALGORITHM],
+            options={"require": ["sub", "iat", "exp", "type", "av"]},
+        )
+    except InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",

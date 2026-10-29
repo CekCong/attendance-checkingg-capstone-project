@@ -98,10 +98,21 @@ workflow tests. Browser and monitoring evidence, dependency audit,
 reproduction commands and remaining release gates are documented in
 [release validation](RELEASE-VALIDATION.md).
 
-## 6. Remaining release work
+## 6. Dependency modernization and session QR — checkpoint
 
-Modernize the vulnerable Python dependencies with ML compatibility checks, complete
-real-device positive liveness/attack evaluation, implement camera QR decoding, and
-complete production deployment acceptance. Local Grafana provisioning and datasource
-connectivity are verified. Stage 5 is implemented;
-production release acceptance is still open.
+Implemented: audited Python dependency locks, PyJWT migration, test/runtime dependency
+separation, lean backend Docker image, expiring instructor-issued QR codes and local
+student camera decoding with manual fallback. Validation: 172 public/regression tests,
+17 Docker API/student tests, seven QR browser tests and seven mobile workflow tests
+passed. Student/instructor production builds, TypeScript and the new ArcFace stack
+also passed compatibility checks. New application dependency audits report zero
+known vulnerabilities.
+
+**Still open:** MediaPipe Tasks model download is denied by the cloud proxy. The
+adapter and installer are prepared; the real Tasks pipeline and new face image are
+unverified. HTTP suites used the retained Stage 5 face service. Enable the saved
+`storage.googleapis.com` network addition, then complete model acceptance before
+replacing that process. See [Stage 6 evidence and resume commands](STAGE6-DEPENDENCIES-QR.md).
+
+Real-device biometric acceptance and production deployment/provisioning are still
+release gates. Stage 6 is a checkpoint, not production release approval.

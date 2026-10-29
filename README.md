@@ -57,10 +57,11 @@ Welcome to our capstone project! The goal is to build a secure, privacy-preservi
 
 ## Migration status
 
-Stages 1–5 are implemented on `hongyu`. See [migration progress](docs/MIGRATION.md)
-and [release validation](docs/RELEASE-VALIDATION.md) for verified behavior and
-remaining release gates. Python dependency vulnerabilities, real-device biometric
-acceptance, camera QR decoding and deployment checks remain open.
+Stages 1–5 are implemented on `hongyu`. Stage 6 adds updated dependency locks and
+session QR issuance/scanning; the MediaPipe migration awaits official model access
+and validation. See [migration progress](docs/MIGRATION.md) and
+[Stage 6 checkpoint](docs/STAGE6-DEPENDENCIES-QR.md). Real-device biometric acceptance
+and production deployment/provisioning remain open.
 
 ## Getting Started
 

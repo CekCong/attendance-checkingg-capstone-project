@@ -24,6 +24,10 @@ INSTRUCTOR_OR_ADMIN = require_roles("instructor", "admin")
 STAFF = require_roles("ta", "instructor", "admin")
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _scoped_course_ids(db: Session, user: Dict[str, Any]) -> Optional[list[str]]:
     if user.get("role") == "admin":
         return None
@@ -86,7 +90,7 @@ def stats_overview(
         courses_query = courses_query.filter(CourseModel.id.in_(scoped_course_ids))
         checkins_query = checkins_query.filter(SessionModel.course_id.in_(scoped_course_ids))
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = _utc_now()
     # Calendar-day reports use Singapore time; persisted timestamps are UTC.
     today_start = (now + timedelta(hours=8)).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=8)
     week_start = today_start - timedelta(days=6)

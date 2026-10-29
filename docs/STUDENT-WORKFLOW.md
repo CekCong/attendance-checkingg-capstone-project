@@ -71,3 +71,14 @@ cached or queued. Reconnect before signing in or submitting attendance.
 The public fixtures now follow the complete verification protocol and assert
 static-replay rejection. See [release validation](RELEASE-VALIDATION.md) for browser,
 container and concurrency evidence and the remaining manual acceptance work.
+
+## Stage 6 QR workflow
+
+An instructor can issue or rotate a QR code for an active session. Once issued,
+students must provide the current code before the 90-second expiry (or session
+close). Refresh the session list if the instructor just enabled QR verification.
+Choose the session and scan its QR code, or type the displayed manual code. Scanning
+uses the rear camera when available, decodes locally and stops the stream after
+capture/cancellation. It never opens scanned URLs, saves images or submits attendance.
+Continue through the existing consent, location, device and liveness verification.
+See [Stage 6 validation](STAGE6-DEPENDENCIES-QR.md) for tests and remaining acceptance.

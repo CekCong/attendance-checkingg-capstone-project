@@ -1,4 +1,6 @@
 import uuid
+import secrets
+import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -514,3 +516,31 @@ def delete_session(
     )
     db.delete(session_obj)
     db.commit()
+
+
+@router.post("/{session_id}/qr-code")
+def rotate_session_qr(
+    session_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Enable or rotate a short-lived code; only assigned instructors/admins issue it."""
+    if current_user.get("role") not in {"instructor", "admin"}:
+        raise HTTPException(403, "Instructor or administrator access required")
+    session = db.query(SessionModel).filter_by(id=session_id).with_for_update().first()
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    require_course_staff_access(db, current_user, session.course_id)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if session.status != "active" or not session.checkin_opens_at <= now < session.checkin_closes_at:
+        raise HTTPException(400, "The session check-in window is not open")
+    session.qr_code_secret = secrets.token_urlsafe(24)
+    session.qr_code_expires_at = min(now + timedelta(seconds=90), session.checkin_closes_at)
+    add_audit_log(db, request, "session_updated", details="qr_code_rotated", user_id=str(current_user["id"]),
+                  resource_type="session", resource_id=session.id)
+    payload = {"v": 1, "session_id": session.id, "code": session.qr_code_secret}
+    result = {"code": session.qr_code_secret, "payload": json.dumps(payload, separators=(",", ":")),
+              "expires_at": session.qr_code_expires_at.replace(tzinfo=timezone.utc).isoformat()}
+    db.commit()
+    return result

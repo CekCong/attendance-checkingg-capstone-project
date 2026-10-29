@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { SessionQrScanner } from "@/components/check-in/SessionQrScanner";
 import { GlassCard } from "@/components/check-in/GlassCard";
 import {
   studentList,
@@ -19,6 +20,7 @@ export function StudentDashboard({
   const [history, setHistory] = useState<Attendance[]>([]);
   const [selected, setSelected] = useState("");
   const [qrCode, setQrCode] = useState("");
+  const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
@@ -82,6 +84,7 @@ export function StudentDashboard({
                 onChange={(e) => {
                   setSelected(e.target.value);
                   setQrCode("");
+                  setScanning(false);
                 }}
                 className="mt-2 w-full rounded-xl bg-sky-950 p-3 text-white"
               >
@@ -94,20 +97,29 @@ export function StudentDashboard({
               </select>
             </label>
             {session?.qr_code_enabled && (
+              <div>
               <label className="mt-4 block">
                 Session verification code
                 <input
+                  aria-label="Session verification code"
+                  aria-describedby="session-code-help"
                   value={qrCode}
                   onChange={(e) => setQrCode(e.target.value)}
                   className="mt-2 w-full rounded-xl bg-sky-950 p-3 text-white"
                 />
-                <span className="text-sm">
+                <span id="session-code-help" className="text-sm">
                   Enter the current code provided by your instructor.
                 </span>
               </label>
+              <p className="mt-2 text-sm">Scanning uses your camera locally. QR images are not uploaded or saved.</p>
+              {scanning ? <SessionQrScanner sessionId={session.id}
+                onCode={(code) => { setQrCode(code); setScanning(false); }}
+                onClose={() => setScanning(false)} /> :
+                <button type="button" onClick={() => setScanning(true)} className="mt-3 underline">Scan session QR code</button>}
+              </div>
             )}
             <button
-              disabled={!session || (session.qr_code_enabled && !qrCode.trim())}
+              disabled={scanning || !session || (session.qr_code_enabled && !qrCode.trim())}
               onClick={() => session && onStartCheckIn(session, qrCode.trim())}
               className="mt-5 w-full rounded-xl bg-white p-3 font-semibold text-sky-950 disabled:opacity-40"
             >

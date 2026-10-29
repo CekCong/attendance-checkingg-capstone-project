@@ -1,3 +1,4 @@
+import secrets
 import uuid
 import os
 import math
@@ -742,7 +743,7 @@ async def create_checkin(
         )
 
     if session_obj.qr_code_secret:
-        if payload.qr_code != session_obj.qr_code_secret:
+        if not secrets.compare_digest((payload.qr_code or "").encode(), session_obj.qr_code_secret.encode()):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid QR code provided for this session."
@@ -750,7 +751,7 @@ async def create_checkin(
         qr_expires_at = session_obj.qr_code_expires_at
         if qr_expires_at and qr_expires_at.tzinfo is not None:
             qr_expires_at = qr_expires_at.replace(tzinfo=None)
-        if qr_expires_at and now > qr_expires_at:
+        if qr_expires_at and now >= qr_expires_at:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="QR code for this session has expired."
