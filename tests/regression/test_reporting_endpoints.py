@@ -1,3 +1,10 @@
+import csv
+import io
+import uuid
+
+import pytest
+
+
 def test_statistics_and_exports_use_database_records(
     client,
     test_course,
@@ -93,3 +100,56 @@ def test_statistics_and_exports_use_database_records(
         and item["resource_id"] == test_session["id"]
         for item in audit_logs.json()["items"]
     )
+
+    csv_export = client.get(
+        f"/api/v1/export/session/{test_session['id']}",
+        headers=auth_headers_instructor,
+    )
+    assert csv_export.status_code == 200
+    reader = csv.DictReader(io.StringIO(csv_export.text))
+    assert "student_email" in reader.fieldnames
+    assert list(reader) == []
+
+
+@pytest.mark.parametrize("path", ["stats/sessions", "export/session"])
+def test_reporting_rejects_unknown_sessions(client, auth_headers_instructor, path):
+    response = client.get(
+        f"/api/v1/{path}/{uuid.uuid4()}", headers=auth_headers_instructor,
+    )
+    assert response.status_code == 404
+
+
+def test_reporting_rejects_unassigned_instructor(client, test_session, unique_email):
+    email = unique_email()
+    registration = client.post("/api/v1/auth/register", json={
+        "email": email,
+        "password": "reporting-test-password",
+        "full_name": "Unassigned instructor",
+        "role": "instructor",
+    })
+    assert registration.status_code == 201
+    login = client.post("/api/v1/auth/login", json={
+        "email": email, "password": "reporting-test-password",
+    })
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    for path in ("stats/sessions", "export/session"):
+        response = client.get(
+            f"/api/v1/{path}/{test_session['id']}", headers=headers,
+        )
+        assert response.status_code == 403
+
+
+def test_audit_summary_counts_persisted_events(client, auth_headers_admin):
+    before = client.get("/api/v1/audit/summary", headers=auth_headers_admin)
+    assert before.status_code == 200
+    created = client.post("/api/v1/audit/logs", headers=auth_headers_admin, json={
+        "action": "data_exported", "resource_type": "reporting_regression",
+    })
+    assert created.status_code == 201
+    after = client.get("/api/v1/audit/summary", headers=auth_headers_admin)
+    assert after.status_code == 200
+    assert after.json()["by_action"]["data_exported"] > before.json()["by_action"].get("data_exported", 0)
+    assert after.json()["total_logs"] == sum(after.json()["by_action"].values())
+    invalid = client.get("/api/v1/audit/summary?days=0", headers=auth_headers_admin)
+    assert invalid.status_code == 422

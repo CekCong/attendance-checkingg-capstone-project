@@ -69,18 +69,25 @@ export function InstructorDashboard() {
   const [updatingSessionId, setUpdatingSessionId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!accessToken) {
+      setData(null);
+      setCourses([]);
+      return;
+    }
     try {
-      const response = await fetch(
-        "/api/instructor/dashboard",
-        { cache: "no-store" },
-      );
-
-      if (!response.ok) {
-        throw new Error("Could not load dashboard");
-      }
-
-      const dashboard =
-        (await response.json()) as InstructorDashboardData;
+      const dashboard: InstructorDashboardData = {
+        generatedAt: new Date().toISOString(),
+        todaySessions: [],
+        flagged: [],
+        records: [],
+        auditLogs: [],
+        kpis: {
+          todayCheckins: 0,
+          flaggedPending: 0,
+          approvalRate: 0,
+          liveSessions: 0,
+        },
+      };
 
       if (accessToken) {
         const [backendFlagged, backendSessions, backendCourses, backendCheckins, backendAuditLogs,] =

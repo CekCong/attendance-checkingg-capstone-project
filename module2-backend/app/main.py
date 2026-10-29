@@ -106,8 +106,6 @@ from .routers import (
     devices,
     enrollment,
     export,
-    observability,
-    rbac_stubs,
     sessions,
     stats,
     users,
@@ -227,11 +225,9 @@ app.include_router(admin.router, prefix="/api/v1")
 app.include_router(enrollment.router, prefix="/api/v1")
 app.include_router(checkins.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
-app.include_router(observability.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(stats.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")
-app.include_router(rbac_stubs.router, prefix="/api/v1")
 
 
 
