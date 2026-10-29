@@ -66,3 +66,19 @@ export type LivenessTicket = {
 export function serverTime(value: string): number {
   return Date.parse(/[zZ]$|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`);
 }
+
+/** Fetch every page of a student array endpoint without silently truncating. */
+export async function studentList<T extends { id: string }>(path: string, token: string): Promise<T[]> {
+  const items: T[] = [];
+  const seen = new Set<string>();
+  for (let offset = 0; ; ) {
+    const page = await studentRequest<T[]>(`${path}${path.includes("?") ? "&" : "?"}limit=100&offset=${offset}`, token);
+    for (const item of page) {
+      if (seen.has(item.id)) throw new Error("Records changed while loading. Please refresh.");
+      seen.add(item.id);
+      items.push(item);
+    }
+    if (page.length < 100) return items;
+    offset += page.length;
+  }
+}

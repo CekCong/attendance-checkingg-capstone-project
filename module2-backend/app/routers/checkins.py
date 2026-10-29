@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from ..security import get_current_user
 from ..rate_limit import client_ip, enforce_rate_limit
 from ..database import get_db as shared_get_db
@@ -26,8 +26,8 @@ from ..services.face_client import (
 
 AttendanceRecord = CheckinModel
 
-def get_db():
-    yield from shared_get_db()
+# Reuse the dependency identity so authentication and the route share one session.
+get_db = shared_get_db
 
 # --- Enums ---
 class CheckinStatus(str, enum.Enum):
@@ -184,6 +184,8 @@ class FlaggedCheckinItem(BaseModel):
 class FlaggedCheckinPaginatedResponse(BaseModel):
     items: List[FlaggedCheckinItem]
     total: int
+    limit: int
+    offset: int
 
 class AppealCreate(BaseModel):
     appeal_reason: str
@@ -268,6 +270,7 @@ def get_flagged_checkins(
     course_id: Optional[uuid.UUID] = Query(None, description="Filter by course"),
     session_id: Optional[uuid.UUID] = Query(None, description="Filter by session"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
+    offset: int = Query(0, ge=0),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -300,9 +303,11 @@ def get_flagged_checkins(
         query = query.filter(AttendanceRecord.session_id == str(session_id))
 
     total = query.count()
-    records = query.order_by(AttendanceRecord.checked_in_at.desc()).limit(limit).all()
+    records = query.options(joinedload(AttendanceRecord.session), joinedload(AttendanceRecord.student)).order_by(AttendanceRecord.checked_in_at.desc(), AttendanceRecord.id).offset(offset).limit(limit).all()
 
     return {
+        "limit": limit,
+        "offset": offset,
         "items": [
             FlaggedCheckinItem(
                 id=rec.id,
@@ -328,6 +333,7 @@ def get_flagged_checkins(
 def get_my_checkins(
     course_id: Optional[uuid.UUID] = Query(None, description="Filter by course"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
+    offset: int = Query(0, ge=0),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -349,7 +355,7 @@ def get_my_checkins(
     if course_id:
         query = query.filter(SessionModel.course_id == str(course_id))
 
-    records = query.order_by(AttendanceRecord.checked_in_at.desc()).limit(limit).all()
+    records = query.options(joinedload(AttendanceRecord.session), joinedload(AttendanceRecord.student)).order_by(AttendanceRecord.checked_in_at.desc(), AttendanceRecord.id).offset(offset).limit(limit).all()
 
     return [
         MyCheckinItem(
@@ -615,7 +621,7 @@ def list_checkins(
         query = query.filter(AttendanceRecord.checked_in_at <= end_date)
 
     total = query.count()
-    records = query.order_by(AttendanceRecord.checked_in_at.desc()).offset(offset).limit(limit).all()
+    records = query.options(joinedload(AttendanceRecord.session), joinedload(AttendanceRecord.student)).order_by(AttendanceRecord.checked_in_at.desc(), AttendanceRecord.id).offset(offset).limit(limit).all()
 
     items = [
         CheckinListItem(

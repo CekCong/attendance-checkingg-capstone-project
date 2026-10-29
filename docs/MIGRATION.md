@@ -76,10 +76,32 @@ The repeatable migration and owner-level audit trigger were also verified locall
 
 ## 5. Dashboard completeness and release validation
 
-- Migrate the six legacy check-in fixtures to the full consent/proof workflow
-  without relaxing the enforced policy; rerun the complete suite.
-- Verify pagination, report completeness, scope, and audited exports.
-- Add offline app-shell caching without caching authentication or submissions.
-- Verify mobile behavior, monitoring, Docker deployment, and the full public suite.
-- Evaluate real face/attack samples and concurrent workloads separately from
-  endpoint contract tests; record any remaining limitations.
+Implemented:
+- Load all report pages, retrieve historical sessions, and export complete scoped
+  attendance from the backend with audit events and CSV formula protection.
+- Apply Singapore calendar boundaries and preserve recorded attendance after
+  enrollment changes; fix instructor analytics scope and session query counts.
+- Add a public offline fallback without caching private data or queuing submissions.
+- Add readiness checks and bounded metrics for both services, Compose health gates,
+  trusted build-CA support, and internal face-service proxy bypass.
+- Share database sessions and bound API concurrency to prevent pool exhaustion.
+- Upgrade Next.js to 16.4.3 and ship a non-root standalone production image.
+- Migrate legacy tests to full consent/device/liveness proofs; require persisted
+  rejection of static replay. Replace the concurrency skip with 20 real HTTP clients.
+
+Validation on 30 October 2026 (Singapore): **154 public/regression tests passed,
+zero failed, zero skipped**, against Docker backend/face services and PostgreSQL.
+The 20-client workload verifies the static-replay rejection path; it does not
+establish live-inference latency or biometric accuracy. Student/instructor production
+builds and TypeScript passed, along with 10 browser tests and seven mobile camera
+workflow tests. Browser and monitoring evidence, dependency audit,
+reproduction commands and remaining release gates are documented in
+[release validation](RELEASE-VALIDATION.md).
+
+## 6. Remaining release work
+
+Modernize the vulnerable Python dependencies with ML compatibility checks, complete
+real-device positive liveness/attack evaluation, implement camera QR decoding, and
+complete production deployment acceptance. Local Grafana provisioning and datasource
+connectivity are verified. Stage 5 is implemented;
+production release acceptance is still open.

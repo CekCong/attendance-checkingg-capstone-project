@@ -110,7 +110,7 @@ def get_audit_logs(
 
     total = query.count()
     items = (
-        query.order_by(AuditLogModel.timestamp.desc())
+        query.order_by(AuditLogModel.timestamp.desc(), AuditLogModel.id)
         .offset(offset)
         .limit(limit)
         .all()

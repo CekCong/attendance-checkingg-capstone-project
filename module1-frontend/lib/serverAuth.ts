@@ -24,7 +24,7 @@ export async function forwardAuth(
     );
   }
 
-  const refreshToken = cookies().get(REFRESH_COOKIE)?.value;
+  const refreshToken = (await cookies()).get(REFRESH_COOKIE)?.value;
   let body: Record<string, unknown> = {};
   if (action === "login" || action === "register") {
     const input = await request.json().catch(() => null);

@@ -4,7 +4,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, Enum as SQLEnum, ForeignKey, create_engine, func
-from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship, joinedload
 import enum
 import os
 from dotenv import load_dotenv
@@ -18,22 +18,8 @@ from app.audit import add_audit_log
 # --- Database & Base Setup ---
 load_dotenv()
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://postgres:your_password@localhost:5432/your_database"
-)
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
 Base = declarative_base()
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 # --- Enums & SQLAlchemy Models ---
 
@@ -262,21 +248,20 @@ def list_sessions(
         query = query.filter(SessionModel.scheduled_start <= end_date)
 
     total = query.count()
-    sessions = query.offset(offset).limit(limit).all()
+    sessions = query.options(joinedload(SessionModel.course)).order_by(SessionModel.scheduled_start.desc(), SessionModel.id).offset(offset).limit(limit).all()
 
+    course_ids = {s.course_id for s in sessions}
+    session_ids = [s.id for s in sessions]
+    enrolled_counts = dict(db.query(CourseEnrollment.course_id, func.count(CourseEnrollment.id)).filter(
+        CourseEnrollment.course_id.in_(course_ids), CourseEnrollment.is_active.is_(True),
+    ).group_by(CourseEnrollment.course_id).all())
+    checkin_counts = dict(db.query(AttendanceRecord.session_id, func.count(AttendanceRecord.id)).filter(
+        AttendanceRecord.session_id.in_(session_ids),
+    ).group_by(AttendanceRecord.session_id).all())
     items = []
     for s in sessions:
-        total_enrolled = (
-            db.query(func.count(CourseEnrollment.id))
-            .filter(CourseEnrollment.course_id == s.course_id)
-            .scalar() or 0
-        )
-
-        checked_in_count = (
-            db.query(func.count(AttendanceRecord.id))
-            .filter(AttendanceRecord.session_id == s.id)
-            .scalar() or 0
-        )
+        total_enrolled = enrolled_counts.get(s.course_id, 0)
+        checked_in_count = checkin_counts.get(s.id, 0)
 
         items.append(
             SessionListItemResponse(
@@ -343,6 +328,7 @@ def list_my_sessions(
     status_filter: Optional[SessionStatus] = Query(None, alias="status", description="Filter by status"),
     upcoming: bool = Query(False, description="Only show future sessions"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
+    offset: int = Query(0, ge=0),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -375,7 +361,7 @@ def list_my_sessions(
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         query = query.filter(SessionModel.scheduled_start > now)
 
-    sessions = query.limit(limit).all()
+    sessions = query.order_by(SessionModel.scheduled_start.desc(), SessionModel.id).offset(offset).limit(limit).all()
     results = []
     for s in sessions:
         resp = SessionResponse.model_validate(s)

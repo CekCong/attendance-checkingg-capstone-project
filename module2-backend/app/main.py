@@ -95,6 +95,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from .routers import (
     admin,
@@ -109,7 +110,9 @@ from .routers import (
     stats,
     users,
 )
-from .database import SessionLocal
+from .database import SessionLocal, engine
+from .rate_limit import get_redis_client
+from .admission import DatabaseAdmissionMiddleware
 from .retention import cleanup_expired_checkins, cleanup_expired_users
 from .migrate import check_runtime_database
 
@@ -168,26 +171,29 @@ async def prometheus_metrics(request: Request, call_next):
         return await call_next(request)
 
     start = time.perf_counter()
+    method = request.method if request.method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"} else "OTHER"
     status = "500"
 
     try:
         response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
         status = str(response.status_code)
         return response
     finally:
         duration = time.perf_counter() - start
 
         route = request.scope.get("route")
-        path = getattr(route, "path", request.url.path)
+        path = getattr(route, "path", "unmatched")
 
         HTTP_REQUESTS.labels(
-            method=request.method,
+            method=method,
             path=path,
             status=status,
         ).inc()
 
         HTTP_REQUEST_DURATION.labels(
-            method=request.method,
+            method=method,
             path=path,
         ).observe(duration)
 
@@ -208,6 +214,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(DatabaseAdmissionMiddleware)
+
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(courses.router, prefix="/api/v1")
 app.include_router(sessions.router, prefix="/api/v1")
@@ -227,3 +235,17 @@ app.include_router(export.router, prefix="/api/v1")
 async def health_check():
     """Basic health check endpoint."""
     return {"status": "healthy"}
+
+
+@app.get("/ready")
+def readiness(response: Response):
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        client = get_redis_client()
+        if client is None or not client.ping():
+            raise RuntimeError("Redis unavailable")
+    except Exception:
+        response.status_code = 503
+        return {"status": "unavailable"}
+    return {"status": "ready"}

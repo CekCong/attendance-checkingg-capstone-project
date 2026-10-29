@@ -802,3 +802,10 @@ def create_bulk_users(http_client, auth_headers_admin) -> Callable:
         return users
 
     return _create
+
+
+@pytest.fixture
+def prepared_checkin(client, test_session, test_enrollment, auth_headers_student):
+    """Complete consent/proof flow; static frames should yield rejected attendance."""
+    from verification import prepare_static_replay
+    return prepare_static_replay(client, auth_headers_student, test_session['id'])

@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { GlassCard } from "@/components/check-in/GlassCard";
 import {
-  studentRequest,
+  studentList,
   serverTime,
   type StudentSession,
   type Attendance,
@@ -26,11 +26,11 @@ export function StudentDashboard({
     let active = true;
     setLoading(true);
     void Promise.all([
-      studentRequest<StudentSession[]>(
-        "/sessions/my-sessions?status=active&limit=100",
+      studentList<StudentSession>(
+        "/sessions/my-sessions?status=active",
         token,
       ),
-      studentRequest<Attendance[]>("/checkins/my-checkins?limit=100", token),
+      studentList<Attendance>("/checkins/my-checkins", token),
     ])
       .then(([items, records]) => {
         if (active) {
@@ -129,7 +129,7 @@ export function StudentDashboard({
       </GlassCard>
       <GlassCard className="p-6">
         <h2 className="text-xl font-semibold">Attendance history</h2>
-        <p className="text-sm">Your latest 100 check-ins.</p>
+        <p className="text-sm">Your attendance records.</p>
         {!history.length && !loading && !error && (
           <p className="mt-4">No attendance records yet.</p>
         )}

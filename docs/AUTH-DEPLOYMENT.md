@@ -50,8 +50,8 @@ frontend image, build with `--target production` and supply the appropriate buil
 arguments for app surface and browser API origin. Production build validation still
 requires access to `fonts.googleapis.com` and `fonts.gstatic.com`.
 
-On machines whose network uses a private HTTPS inspection CA, the frontend and
-backend Dockerfiles accept an optional BuildKit secret named `proxy_ca`:
+On machines whose network uses a private HTTPS inspection CA, the frontend, backend
+and face-service Dockerfiles accept an optional BuildKit secret named `proxy_ca`:
 
 ```bash
 docker build --secret id=proxy_ca,src=/path/to/trusted-ca-bundle.pem \
@@ -62,8 +62,16 @@ docker build --secret id=proxy_ca,src=/path/to/trusted-ca-bundle.pem \
 
 Use a trust bundle supplied by the environment. The secret is mounted only for
 installation/build commands; it is not copied into the image. TLS and package
-integrity verification remain enabled. The face-service image is outside this
-stage's Docker validation.
+integrity verification remain enabled. Stage 5 builds and validates the real
+face-service image, including its bundled model and backend integration. The
+optional `docker-compose.proxy.yml` overlay supplies the same build secret to all
+application images; see [release validation](RELEASE-VALIDATION.md).
+
+Production frontend images use Next.js 16 standalone output and run as the
+non-root `node` user. Node 20.9+ is required for native builds (Docker uses Node 22).
+The browser API origin and student/instructor surface must be supplied at build
+time. Both API services expose `/ready`; Compose waits for these dependency checks
+before starting dependent services. `/health` remains a basic process check.
 
 ## Rate limits and isolated tests
 

@@ -30,8 +30,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
-def get_db():
-    yield from shared_get_db()
+# Reuse the dependency identity so authentication and the route share one session.
+get_db = shared_get_db
 
 router = APIRouter(prefix="/devices", tags=["Devices"])
 

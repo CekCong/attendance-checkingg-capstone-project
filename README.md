@@ -46,7 +46,7 @@ Welcome to our capstone project! The goal is to build a secure, privacy-preservi
 - Anti-spoofing heuristics
 
 ### Module 4: Observability & Instructor Dashboard 
-**Recommended Tech Stack**: Streamlit, Prometheus, Grafana
+**Implemented stack**: Next.js instructor surface, Prometheus, Grafana
 - Instructor web interface
 - Real-time analytics
 - Audit log explorer
@@ -55,18 +55,25 @@ Welcome to our capstone project! The goal is to build a secure, privacy-preservi
 
 ---
 
+## Migration status
+
+Stages 1–5 are implemented on `hongyu`. See [migration progress](docs/MIGRATION.md)
+and [release validation](docs/RELEASE-VALIDATION.md) for verified behavior and
+remaining release gates. Python dependency vulnerabilities, real-device biometric
+acceptance, camera QR decoding and deployment checks remain open.
+
 ## Getting Started
 
 ### Prerequisites
 - Docker & Docker Compose
 - Python 3.11+
-- Node.js 18+
+- Node.js 20.9+
 
 ### Quick Start
 
 ```bash
 # Navigate to project directory
-cd student-starter
+cd attendance-checkin-pwa
 
 # Start infrastructure services (database, redis, prometheus)
 docker-compose up -d postgres redis prometheus grafana
@@ -97,7 +104,7 @@ You have access to the public test suite (75% of your grade).
 ### Step 1: Install Test Dependencies
 
 ```bash
-cd student-starter
+cd attendance-checkin-pwa
 
 # Create virtual environment
 python3 -m venv .venv
@@ -259,7 +266,7 @@ Please review these specifications carefully:
 ## Project Structure
 
 ```
-student-starter/
+attendance-checkin-pwa/
 ├── module1-frontend/          # PWA (your implementation)
 ├── module2-backend/           # API (your implementation)
 ├── module3-face-recognition/  # ML service (your implementation)

@@ -22,7 +22,8 @@ class FaceServiceError(Exception):
 
 async def _post(path: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        # This is private service-to-service traffic, never an outbound proxy hop.
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.post(
                 f"{FACE_SERVICE_URL}{path}",
                 json=payload,

@@ -1,10 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { GlassCard } from "@/components/check-in/GlassCard";
 import {
-  attendanceToCsv,
-  attendanceToJson,
   downloadTextFile,
 } from "@/lib/exportAttendance";
 import type {
@@ -22,10 +20,19 @@ import {
   fetchCheckins,
   updateBackendSessionStatus,
   fetchAuditLogs,
+  exportAttendance,
+  type BackendCheckin,
   type BackendCourse,
 } from "@/lib/instructorApi";
 
 const POLL_MS = 30_000;
+function attendanceRecord(checkin: BackendCheckin): AttendanceRecord {
+  return { checkinId: checkin.id, studentId: checkin.student_id,
+    studentName: checkin.student_name, studentEmail: checkin.student_email,
+    sessionId: checkin.session_id, sessionName: checkin.session_name,
+    sessionDate: checkin.checked_in_at.slice(0, 10), status: checkin.status,
+    checkedInAt: checkin.checked_in_at, riskScore: checkin.risk_score };
+}
 
 function formatTime(iso: string) {
   try {
@@ -68,7 +75,24 @@ export function InstructorDashboard() {
   const [creatingSession, setCreatingSession] = useState(false);
   const [updatingSessionId, setUpdatingSessionId] = useState<string | null>(null);
 
+  const [sessionRecords, setSessionRecords] = useState<AttendanceRecord[]>([]);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const loadGeneration = useRef(0);
+  useEffect(() => {
+    let active = true;
+    setSessionRecords([]);
+    if (!accessToken || selectedSession === "all") { setReportLoading(false); return; }
+    setReportLoading(true);
+    fetchCheckins(accessToken, selectedSession).then((items) => {
+      if (active) setSessionRecords(items.map(attendanceRecord));
+    }).catch((e) => { if (active) setError(e.message); })
+      .finally(() => { if (active) setReportLoading(false); });
+    return () => { active = false; };
+  }, [accessToken, selectedSession, lastFetch]);
+
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     if (!accessToken) {
       setData(null);
       setCourses([]);
@@ -99,6 +123,7 @@ export function InstructorDashboard() {
             fetchAuditLogs(accessToken),
           ]);
 
+          if (generation !== loadGeneration.current) return;
           setCourses(backendCourses)
 
         dashboard.flagged = backendFlagged.map((item) => ({
@@ -137,18 +162,7 @@ export function InstructorDashboard() {
           }),
         );
 
-        dashboard.records = backendCheckins.map((checkin) => ({
-          checkinId: checkin.id,
-          studentId: checkin.student_id,
-          studentName: checkin.student_name,
-          studentEmail: checkin.student_email,
-          sessionId: checkin.session_id,
-          sessionName: checkin.session_name,
-          sessionDate: checkin.checked_in_at.slice(0, 10),
-          status: checkin.status,
-          checkedInAt: checkin.checked_in_at,
-          riskScore: checkin.risk_score,
-        }));
+        dashboard.records = backendCheckins.map(attendanceRecord);
 
         dashboard.auditLogs = backendAuditLogs.map((log) => ({
           id: log.id,
@@ -208,11 +222,7 @@ export function InstructorDashboard() {
     return showAllFlagged ? data.flagged : data.flagged.slice(0, 3);
   }, [data, showAllFlagged]);
 
-  const filteredRecords = useMemo(() => {
-    if (!data) return [];
-    if (selectedSession === "all") return data.records;
-    return data.records.filter((row) => row.sessionId === selectedSession);
-  }, [data, selectedSession]);
+  const filteredRecords = selectedSession === "all" ? data?.records ?? [] : sessionRecords;
 
   const auditActions = useMemo(() => {
     if (!data) return [];
@@ -274,18 +284,16 @@ export function InstructorDashboard() {
     };
   }, [data]);
 
-  function exportRecords(format: "csv" | "json") {
-    const stamp = new Date().toISOString().slice(0, 10);
-    if (format === "csv") {
-      downloadTextFile(`attendance-${stamp}.csv`, attendanceToCsv(filteredRecords), "text/csv;charset=utf-8");
-      return;
-    }
-    downloadTextFile(
-      `attendance-${stamp}.json`,
-      JSON.stringify(attendanceToJson(filteredRecords), null, 2),
-      "application/json",
-    );
-  };
+  async function exportRecords(format: "csv" | "json") {
+    if (!accessToken) return;
+    setExporting(true);
+    try {
+      const contents = await exportAttendance(accessToken, format, selectedSession);
+      downloadTextFile(`attendance.${format}`, contents, format === "csv" ? "text/csv;charset=utf-8" : "application/json");
+      await load();
+    } catch (error) { setError(error instanceof Error ? error.message : "Export failed"); }
+    finally { setExporting(false); }
+  }
 
   async function reviewCheckin(
     checkinId: string,
@@ -442,7 +450,7 @@ export function InstructorDashboard() {
         <section className="lg:col-span-7">
           <GlassCard className="h-full p-5 sm:p-6">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="font-display text-xl font-semibold text-white">Today&apos;s sessions</h2>
+              <h2 className="font-display text-xl font-semibold text-white">Sessions</h2>
               <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white">
                 {data?.kpis.liveSessions ?? 0} live
               </span>
@@ -766,11 +774,12 @@ export function InstructorDashboard() {
             <label className="text-sm text-white/80">
               Session
               <select
+                aria-label="Attendance session"
                 value={selectedSession}
                 onChange={(e) => setSelectedSession(e.target.value)}
                 className="ml-2 rounded-xl border border-white/25 bg-sky-950/80 px-3 py-2 text-white"
               >
-                <option value="all">All today</option>
+                <option value="all">All today (Singapore)</option>
                 {(data?.todaySessions ?? []).map((session) => (
                   <option key={session.id} value={session.id}>
                     {session.title}
@@ -780,14 +789,16 @@ export function InstructorDashboard() {
             </label>
             <button
               type="button"
-              onClick={() => exportRecords("csv")}
+              disabled={exporting}
+              onClick={() => void exportRecords("csv")}
               className="rounded-xl bg-white/90 px-4 py-2 text-sm font-semibold text-sky-950"
             >
               Export CSV
             </button>
             <button
               type="button"
-              onClick={() => exportRecords("json")}
+              disabled={exporting}
+              onClick={() => void exportRecords("json")}
               className="rounded-xl border border-white/30 px-4 py-2 text-sm font-semibold text-white"
             >
               Export JSON
@@ -802,7 +813,7 @@ export function InstructorDashboard() {
           </div>
           {showRecords && (
             <div className="mt-4 overflow-x-auto">
-              <RecordsTable records={filteredRecords} />
+              {reportLoading ? <p>Loading report…</p> : <RecordsTable records={filteredRecords} />}
             </div>
           )}
         </GlassCard>

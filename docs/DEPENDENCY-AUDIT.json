@@ -1,0 +1,515 @@
+{
+  "checked_on": "2026-10-30",
+  "timezone": "Asia/Singapore",
+  "frontend": {
+    "next": "16.4.3",
+    "command": "npm audit --omit=dev",
+    "known_vulnerabilities": 0
+  },
+  "python": {
+    "backend": {
+      "source": "pip-audit against pip freeze from built Docker image; no dependency resolution",
+      "affected_packages": [
+        {
+          "package": "cryptography",
+          "installed": "42.0.0",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-1285",
+              "fix_versions": [
+                "42.0.2"
+              ]
+            },
+            {
+              "id": "PYSEC-2024-225",
+              "fix_versions": [
+                "42.0.4"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1284",
+              "fix_versions": [
+                "44.0.1"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-2141",
+              "fix_versions": [
+                "46.0.5"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-35",
+              "fix_versions": [
+                "46.0.6"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3553",
+              "fix_versions": [
+                "49.0.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3554",
+              "fix_versions": [
+                "49.0.0"
+              ]
+            },
+            {
+              "id": "GHSA-h4gh-qq45-vh27",
+              "fix_versions": [
+                "43.0.1"
+              ]
+            },
+            {
+              "id": "GHSA-537c-gmf6-5ccf",
+              "fix_versions": [
+                "48.0.1"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "ecdsa",
+          "installed": "0.19.2",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-1325",
+              "fix_versions": []
+            }
+          ]
+        },
+        {
+          "package": "fastapi",
+          "installed": "0.109.0",
+          "advisories": [
+            {
+              "id": "PYSEC-2024-38",
+              "fix_versions": [
+                "0.109.1"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "geopy",
+          "installed": "2.4.1",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-4218",
+              "fix_versions": [
+                "2.5.0"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "opentelemetry-api",
+          "installed": "1.22.0",
+          "advisories": [
+            {
+              "id": "CVE-2026-114603",
+              "fix_versions": [
+                "1.45.1"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "protobuf",
+          "installed": "4.25.9",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-1805",
+              "fix_versions": [
+                "5.29.6",
+                "6.33.5"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "pytest",
+          "installed": "7.4.4",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-1845",
+              "fix_versions": [
+                "9.0.3"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "python-dotenv",
+          "installed": "1.0.0",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-2270",
+              "fix_versions": [
+                "1.2.2"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "python-jose",
+          "installed": "3.3.0",
+          "advisories": [
+            {
+              "id": "PYSEC-2024-233",
+              "fix_versions": [
+                "3.4.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2024-232",
+              "fix_versions": [
+                "3.4.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2025-185",
+              "fix_versions": []
+            },
+            {
+              "id": "PYSEC-2026-4298",
+              "fix_versions": []
+            }
+          ]
+        },
+        {
+          "package": "python-multipart",
+          "installed": "0.0.6",
+          "advisories": [
+            {
+              "id": "PYSEC-2024-38",
+              "fix_versions": [
+                "0.0.7"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1851",
+              "fix_versions": [
+                "0.0.18"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1852",
+              "fix_versions": [
+                "0.0.22"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3038",
+              "fix_versions": [
+                "0.0.26"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3039",
+              "fix_versions": [
+                "0.0.27"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3040",
+              "fix_versions": [
+                "0.0.31"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3036",
+              "fix_versions": [
+                "0.0.30"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3037",
+              "fix_versions": [
+                "0.0.30"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1850",
+              "fix_versions": [
+                "0.0.7"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "starlette",
+          "installed": "0.35.1",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-1943",
+              "fix_versions": [
+                "0.40.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1941",
+              "fix_versions": [
+                "0.47.2"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-161",
+              "fix_versions": [
+                "1.0.1"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-2281",
+              "fix_versions": [
+                "1.1.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-2280",
+              "fix_versions": [
+                "1.1.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-249",
+              "fix_versions": [
+                "1.3.1"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-248",
+              "fix_versions": [
+                "1.3.0"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "face": {
+      "source": "pip-audit against pip freeze from built Docker image; no dependency resolution",
+      "affected_packages": [
+        {
+          "package": "cryptography",
+          "installed": "42.0.0",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-1285",
+              "fix_versions": [
+                "42.0.2"
+              ]
+            },
+            {
+              "id": "PYSEC-2024-225",
+              "fix_versions": [
+                "42.0.4"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1284",
+              "fix_versions": [
+                "44.0.1"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-2141",
+              "fix_versions": [
+                "46.0.5"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-35",
+              "fix_versions": [
+                "46.0.6"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3553",
+              "fix_versions": [
+                "49.0.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3554",
+              "fix_versions": [
+                "49.0.0"
+              ]
+            },
+            {
+              "id": "GHSA-h4gh-qq45-vh27",
+              "fix_versions": [
+                "43.0.1"
+              ]
+            },
+            {
+              "id": "GHSA-537c-gmf6-5ccf",
+              "fix_versions": [
+                "48.0.1"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "fastapi",
+          "installed": "0.109.0",
+          "advisories": [
+            {
+              "id": "PYSEC-2024-38",
+              "fix_versions": [
+                "0.109.1"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "opentelemetry-api",
+          "installed": "1.22.0",
+          "advisories": [
+            {
+              "id": "CVE-2026-114603",
+              "fix_versions": [
+                "1.45.1"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "protobuf",
+          "installed": "4.25.9",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-1805",
+              "fix_versions": [
+                "5.29.6",
+                "6.33.5"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "pytest",
+          "installed": "7.4.4",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-1845",
+              "fix_versions": [
+                "9.0.3"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "python-multipart",
+          "installed": "0.0.6",
+          "advisories": [
+            {
+              "id": "PYSEC-2024-38",
+              "fix_versions": [
+                "0.0.7"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1851",
+              "fix_versions": [
+                "0.0.18"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1852",
+              "fix_versions": [
+                "0.0.22"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3038",
+              "fix_versions": [
+                "0.0.26"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3039",
+              "fix_versions": [
+                "0.0.27"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3040",
+              "fix_versions": [
+                "0.0.31"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3036",
+              "fix_versions": [
+                "0.0.30"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-3037",
+              "fix_versions": [
+                "0.0.30"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1850",
+              "fix_versions": [
+                "0.0.7"
+              ]
+            }
+          ]
+        },
+        {
+          "package": "starlette",
+          "installed": "0.35.1",
+          "advisories": [
+            {
+              "id": "PYSEC-2026-1943",
+              "fix_versions": [
+                "0.40.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-1941",
+              "fix_versions": [
+                "0.47.2"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-161",
+              "fix_versions": [
+                "1.0.1"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-2281",
+              "fix_versions": [
+                "1.1.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-2280",
+              "fix_versions": [
+                "1.1.0"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-249",
+              "fix_versions": [
+                "1.3.1"
+              ]
+            },
+            {
+              "id": "PYSEC-2026-248",
+              "fix_versions": [
+                "1.3.0"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

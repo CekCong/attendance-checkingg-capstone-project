@@ -8,6 +8,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 import os
 from dotenv import load_dotenv
 from ..models import CourseModel as Course, UserModel as User, SessionModel
+from ..database import get_db
 from ..course_access import require_course_staff_access, staff_course_ids
 
 from app.security import get_current_user, get_optional_current_user, require_roles
@@ -15,22 +16,8 @@ from app.security import get_current_user, get_optional_current_user, require_ro
 # 1: Database Setup ---
 load_dotenv()
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://postgres:your_password@localhost:5432/your_database"
-)
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
 Base = declarative_base()
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 #2. Pydantic Schemas ---
 class CourseCreate(BaseModel):
@@ -151,7 +138,7 @@ def list_courses(
         )
 
     total = query.count()
-    courses = query.order_by(Course.created_at.desc()).offset(offset).limit(limit).all()
+    courses = query.order_by(Course.created_at.desc(), Course.id).offset(offset).limit(limit).all()
 
     items = []
     for course in courses:

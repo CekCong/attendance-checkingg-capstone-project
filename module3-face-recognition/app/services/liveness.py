@@ -362,6 +362,14 @@ def active_frame_data(frames):
             status_code=400,
             detail=f"Active liveness requires exactly {ACTIVE_FRAME_COUNT} frames.",
         )
+    if len(set(frames)) == 1:
+        try:
+            decode_base64_image(frames[0])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Base64 frame.") from exc
+        # An active gesture cannot consist entirely of the same encoded frame.
+        # Reject this obvious replay before running 15 expensive model passes.
+        return None, None, "Identical frames cannot satisfy an active challenge."
 
     embeddings = []
     landmarks_per_frame = []

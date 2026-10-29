@@ -10,6 +10,7 @@ from app.api.liveness import router as liveness_router
 from app.api.risk import router as risk_router
 from app.api.health import router as health_router
 from app.services.arc_face import get_arcface_model
+from app.metrics import observe, metrics
 
 SERVICE_TITLE = "SAIV Face Recognition Service"
 SERVICE_DESCRIPTION = "Face enrollment, verification, liveness detection, and risk scoring service"
@@ -86,3 +87,6 @@ app.include_router(health_router)
 app.include_router(face_router)
 app.include_router(liveness_router)
 app.include_router(risk_router)
+
+app.middleware("http")(observe)
+app.add_api_route("/metrics", metrics, include_in_schema=False)

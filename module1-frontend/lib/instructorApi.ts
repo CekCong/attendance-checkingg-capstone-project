@@ -28,29 +28,56 @@ function authHeaders(accessToken: string) {
   };
 }
 
-export async function fetchFlaggedCheckins(accessToken: string,): 
-Promise<BackendFlaggedCheckin[]> {
-  const response = await fetch(
-    `${API_BASE}/api/v1/checkins/flagged`,
-    {
-      headers: authHeaders(accessToken),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-
-    throw new Error(
-      error?.detail ?? "Unable to load flagged check-ins",
-    );
+async function fetchAllPages<T extends { id: string }>(path: string, accessToken: string, filters = new URLSearchParams()): Promise<T[]> {
+  const items: T[] = [];
+  const seen = new Set<string>();
+  for (let offset = 0; ; ) {
+    const params = new URLSearchParams(filters);
+    params.set("limit", "100");
+    params.set("offset", String(offset));
+    const response = await fetch(`${API_BASE}/api/v1${path}?${params}`, {
+      headers: authHeaders(accessToken), cache: "no-store", signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => null);
+      throw new Error(error?.detail ?? "Unable to load dashboard records");
+    }
+    const page = await response.json();
+    if (!Array.isArray(page.items) || typeof page.total !== "number")
+      throw new Error("Invalid paginated response");
+    for (const item of page.items) {
+      if (seen.has(item.id)) throw new Error("Records changed while loading. Please refresh.");
+      seen.add(item.id);
+      items.push(item);
+    }
+    offset += page.items.length;
+    if (offset >= page.total) return items;
+    if (!page.items.length) throw new Error("Incomplete report; please refresh.");
   }
+}
 
-  const data = await response.json();
+export function attendanceFilters(sessionId = "all"): URLSearchParams {
+  if (sessionId !== "all") return new URLSearchParams({ session_id: sessionId });
+  // Singapore calendar day, independent of the browser's timezone.
+  const local = new Date(Date.now() + 8 * 3600_000);
+  local.setUTCHours(0, 0, 0, 0);
+  const start = local.getTime() - 8 * 3600_000;
+  return new URLSearchParams({ start_date: new Date(start).toISOString(),
+    end_date: new Date(start + 24 * 3600_000 - 1).toISOString() });
+}
 
-  return Array.isArray(data)
-    ? data
-    : data.items ?? [];
+export async function exportAttendance(accessToken: string, format: "csv" | "json", sessionId: string): Promise<string> {
+  const params = attendanceFilters(sessionId);
+  params.set("format", format);
+  const response = await fetch(`${API_BASE}/api/v1/export/checkins?${params}`, {
+    headers: authHeaders(accessToken), cache: "no-store", signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) throw new Error("Export failed. Please retry.");
+  return response.text();
+}
+
+export async function fetchFlaggedCheckins(accessToken: string): Promise<BackendFlaggedCheckin[]> {
+  return fetchAllPages<BackendFlaggedCheckin>("/checkins/flagged", accessToken);
 }
 
 export async function reviewFlaggedCheckin(
@@ -98,27 +125,8 @@ export type BackendSession = {
   checked_in_count: number;
 };
 
-export async function fetchSessions(accessToken: string,):
-Promise<BackendSession[]> {
-  const response = await fetch(
-    `${API_BASE}/api/v1/sessions/?limit=100`,
-    {
-      headers: authHeaders(accessToken),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-
-    throw new Error(
-      error?.detail ?? "Unable to load sessions",
-    );
-  }
-
-  const data = await response.json();
-
-  return data.items ?? [];
+export async function fetchSessions(accessToken: string): Promise<BackendSession[]> {
+  return fetchAllPages<BackendSession>("/sessions/", accessToken);
 }
 
 export type BackendCourse = {
@@ -128,23 +136,8 @@ export type BackendCourse = {
   semester: string;
 };
 
-export async function fetchCourses(accessToken: string):
-Promise<BackendCourse[]> {
-  const response = await fetch(
-    `${API_BASE}/api/v1/courses/?limit=100`,
-    {
-      headers: authHeaders(accessToken),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-    throw new Error(error?.detail ?? "Unable to load courses");
-  }
-
-  const data = await response.json();
-  return data.items ?? [];
+export async function fetchCourses(accessToken: string): Promise<BackendCourse[]> {
+  return fetchAllPages<BackendCourse>("/courses/", accessToken);
 }
 
 export async function createBackendSession(
@@ -195,39 +188,8 @@ export type BackendCheckin = {
   liveness_passed?: boolean | null;
 };
 
-export async function fetchCheckins(accessToken: string,): 
-  Promise<BackendCheckin[]> {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
-
-  const params = new URLSearchParams({
-    limit: "100",
-    start_date: start.toISOString(),
-    end_date: end.toISOString(),
-  });
-
-  const response = await fetch(
-    `${API_BASE}/api/v1/checkins/?${params.toString()}`,
-    {
-      headers: authHeaders(accessToken),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-
-    throw new Error(
-      error?.detail ?? "Unable to load attendance records",
-    );
-  }
-
-  const data = await response.json();
-
-  return data.items ?? [];
+export async function fetchCheckins(accessToken: string, sessionId = "all"): Promise<BackendCheckin[]> {
+  return fetchAllPages<BackendCheckin>("/checkins/", accessToken, attendanceFilters(sessionId));
 }
 
 export async function updateBackendSessionStatus(
@@ -268,25 +230,6 @@ export type BackendAuditLog = {
   details?: string | null;
 };
 
-export async function fetchAuditLogs(accessToken: string,): 
-Promise<BackendAuditLog[]> {
-  const response = await fetch(
-    `${API_BASE}/api/v1/audit/logs?limit=100`,
-    {
-      headers: authHeaders(accessToken),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-
-    throw new Error(
-      error?.detail ?? "Unable to load audit logs",
-    );
-  }
-
-  const data = await response.json();
-
-  return data.items ?? [];
+export async function fetchAuditLogs(accessToken: string): Promise<BackendAuditLog[]> {
+  return fetchAllPages<BackendAuditLog>("/audit/logs", accessToken);
 }

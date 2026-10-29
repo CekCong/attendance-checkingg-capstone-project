@@ -60,3 +60,14 @@ uses real services and a repository sample image: it verifies enrollment, signed
 device submission, rejection of a static replay through active liveness, and
 persisted rejected history. Positive live-person acceptance, cross-device camera
 quality, and broader attack-image evaluation remain release-validation work.
+
+## Stage 5 follow-up
+
+Session and history lists fetch subsequent pages instead of stopping at 100 rows.
+Production builds register a service worker that caches only public assets and a
+generic offline page. Authentication, attendance records and submissions are not
+cached or queued. Reconnect before signing in or submitting attendance.
+
+The public fixtures now follow the complete verification protocol and assert
+static-replay rejection. See [release validation](RELEASE-VALIDATION.md) for browser,
+container and concurrency evidence and the remaining manual acceptance work.

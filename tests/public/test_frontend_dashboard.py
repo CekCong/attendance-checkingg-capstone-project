@@ -85,44 +85,19 @@ class TestFrontendCheckinContract:
     """Test frontend check-in contract (2 points)"""
 
     @pytest.mark.points(1, category="frontend_contract")
-    def test_checkin_request_format(self, client, test_student, test_session,
-                                    test_enrollment, auth_headers_student):
-        """Test check-in accepts expected request format from frontend."""
-        # This is the format the frontend sends
-        response = client.post("/api/v1/checkins/", headers=auth_headers_student, json={
-            "session_id": test_session["id"],
-            "latitude": 1.3483,
-            "longitude": 103.6831,
-            "location_accuracy_meters": 10.0,
-            "device_fingerprint": f"frontend_device_{uuid.uuid4().hex[:6]}",
-            # Optional fields
-            "liveness_challenge_response": None,
-            "qr_code": None
-        })
-
-        assert response.status_code in [201, 400]  # 400 if already checked in
+    def test_checkin_request_format(self, client, prepared_checkin, auth_headers_student):
+        """Frontend submits both consent and complete server-issued proofs."""
+        response = client.post("/api/v1/checkins/", headers=auth_headers_student, json=prepared_checkin)
+        assert response.status_code == 201, response.text
+        assert response.json()["status"] == "rejected"  # Intentional static replay
 
     @pytest.mark.points(1, category="frontend_contract")
-    def test_checkin_response_format(self, client, test_student, test_session,
-                                     test_enrollment, auth_headers_student):
-        """Test check-in returns expected response format for frontend."""
-        response = client.post("/api/v1/checkins/", headers=auth_headers_student, json={
-            "session_id": test_session["id"],
-            "latitude": 1.3483,
-            "longitude": 103.6831,
-            "device_fingerprint": f"frontend_device_{uuid.uuid4().hex[:6]}"
-        })
-
-        if response.status_code == 201:
-            data = response.json()
-            # Frontend expects these fields for status display
-            assert "id" in data
-            assert "status" in data
-            assert "checked_in_at" in data
-            assert "risk_score" in data
-
-            # Status should be one of expected values
-            assert data["status"] in ["pending", "approved", "flagged", "rejected"]
+    def test_checkin_response_format(self, client, prepared_checkin, auth_headers_student):
+        response = client.post("/api/v1/checkins/", headers=auth_headers_student, json=prepared_checkin)
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert {"id", "status", "checked_in_at", "risk_score"}.issubset(data)
+        assert data["status"] == "rejected" and data["liveness_passed"] is False
 
     def test_my_checkins_list_format(self, client, auth_headers_student):
         """Test my-checkins returns list format for frontend."""

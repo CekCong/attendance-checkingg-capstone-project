@@ -87,7 +87,15 @@ services:
           path: ./module2-backend/requirements.txt
         - action: rebuild
           path: ./module2-backend/Dockerfile
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
     depends_on:
+      face-recognition:
+        condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
       postgres:
@@ -113,7 +121,7 @@ services:
       - ./module3-face-recognition/app:/app/app
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "/app/app"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/ready')"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -169,7 +177,8 @@ services:
         - action: rebuild
           path: ./module1-frontend/Dockerfile
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - saiv-network
 
@@ -211,7 +220,8 @@ services:
         - action: rebuild
           path: ./module1-frontend/Dockerfile
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - saiv-network
 
@@ -245,6 +255,8 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
+      NO_PROXY: prometheus,localhost,127.0.0.1
+      no_proxy: prometheus,localhost,127.0.0.1
     volumes:
       - grafana_data:/var/lib/grafana
       - ./module4-observability/grafana/provisioning:/etc/grafana/provisioning

@@ -92,7 +92,7 @@ restricted test database connection. SQLite/Redis regression tests use an isolat
 in-memory database and Redis database 2; live HTTP tests require the separate
 backend with fixture-rate overrides described in `AUTH-DEPLOYMENT.md`.
 
-The supplied public suite contains six incompatible legacy expectations:
+At the end of Stage 4, the supplied public suite had six incompatible legacy expectations:
 
 - `test_api_functional.py`: successful check-in, duplicate check-in, and history
   tests submit no consent, device proof, or active-liveness proof.
@@ -102,8 +102,11 @@ The supplied public suite contains six incompatible legacy expectations:
 - `test_performance.py::test_checkin_endpoint_latency` expects 201 without consent
   or required proofs; its latency result is not a valid complete-verification benchmark.
 
-These supplied assertions are preserved and fail under the stricter requirements.
-Do not restore permissive check-in behavior to make them green. Stage 5 must migrate
-those fixtures to complete verification flows and distinguish contract, ML and
-performance evidence. Positive real-person liveness and device-camera acceptance
-still require real-device evaluation.
+Stage 5 migrates those fixtures to consent, real sample enrollment, signed device
+proof and fresh active challenges. They require persisted **rejected** results for
+static replays, and retain duplicate/history/latency assertions. The full suite now
+passes without relaxing the verification policy. The former concurrency skip is
+replaced by 20 PostgreSQL-backed HTTP submissions. These static-replay checks do
+not establish live-person latency or accuracy. Positive liveness and device-camera
+acceptance still require real-device evaluation. See [release validation](RELEASE-VALIDATION.md)
+for the remaining Python dependency and deployment security gates.

@@ -19,7 +19,7 @@ class TestEndToEndCheckIn:
 
     @pytest.mark.points(2, category="integration")
     def test_complete_student_checkin_flow(self, client, test_course, auth_headers_instructor, auth_headers_admin):
-        """Test the complete student check-in workflow from registration to approval."""
+        """Test the complete student check-in workflow from registration to persisted static-replay rejection."""
         from datetime import datetime, timedelta
 
         # 1. Student registers
@@ -73,7 +73,7 @@ class TestEndToEndCheckIn:
             "scheduled_end": (now + timedelta(hours=2)).isoformat() + "Z",
             "checkin_opens_at": (now - timedelta(minutes=10)).isoformat() + "Z",
             "checkin_closes_at": (now + timedelta(minutes=30)).isoformat() + "Z",
-            "require_liveness_check": False,  # Simplified for integration test
+            "require_liveness_check": True,
             "risk_threshold": 0.5
         })
         assert session_resp.status_code in [200, 201], f"Session creation failed: {session_resp.text}"
@@ -91,16 +91,13 @@ class TestEndToEndCheckIn:
         sessions_resp = client.get("/api/v1/sessions/active")
         assert sessions_resp.status_code == 200
 
-        # 7. Student checks in
-        checkin_resp = client.post("/api/v1/checkins/", headers=student_headers, json={
-            "session_id": session_id,
-            "latitude": 1.3483,
-            "longitude": 103.6831,
-            "device_fingerprint": f"integration_test_device_{uuid.uuid4().hex[:6]}"
-        })
-        assert checkin_resp.status_code == 201
-        checkin_data = checkin_resp.json()
-        assert checkin_data["status"] in ["pending", "approved", "flagged"]
+        # 7. Enroll face, sign a fresh challenge and submit an intentional replay.
+        from verification import prepare_static_replay
+        body = prepare_static_replay(client, student_headers, session_id)
+        checkin_resp = client.post("/api/v1/checkins/", headers=student_headers, json=body)
+        assert checkin_resp.status_code == 201, checkin_resp.text
+        assert checkin_resp.json()["status"] == "rejected"
+        assert checkin_resp.json()["liveness_passed"] is False
 
         # 8. Student views their check-ins
         my_checkins_resp = client.get("/api/v1/checkins/my-checkins", headers=student_headers)
