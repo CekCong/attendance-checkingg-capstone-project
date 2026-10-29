@@ -125,8 +125,10 @@ environment, use the environment's Python directly instead:
 .\.venv\Scripts\python.exe -m pip install -r requirements-test.txt
 ```
 
-The backend allows up to 100,000 registration and login attempts per IP per
-hour so repeated test runs are not blocked by rate limiting.
+The backend enforces 10 registrations/hour/IP, 60 logins/hour/IP,
+1,000 authenticated API requests/hour/user, and 10 check-ins/minute/user.
+See [authentication and development deployment](docs/AUTH-DEPLOYMENT.md) for
+isolated test overrides and Docker configuration.
 
 ### Step 2: Start Your Services
 

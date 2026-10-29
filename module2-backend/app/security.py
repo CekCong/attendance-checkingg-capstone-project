@@ -6,13 +6,14 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from .database import get_db
 from .models import UserModel
+from .rate_limit import enforce_rate_limit
 
 SECRET_KEY = os.getenv("SECRET_KEY", "saiv-dev-secret-change-me")
 ALGORITHM = "HS256"
@@ -69,6 +70,7 @@ def decode_token(token: str, expected_type: Optional[str] = None) -> Dict[str, A
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: Session = Depends(get_db),
+    request: Request = None,
 ) -> Dict[str, Any]:
     if credentials is None or not credentials.credentials:
         raise HTTPException(
@@ -91,6 +93,10 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account disabled",
         )
+    if request is not None:
+        enforce_rate_limit(
+            f"api:{user.id}", int(os.getenv("API_RATE_LIMIT", "1000")), 3600,
+        )
     return {
         "id": user.id,
         "email": user.email,
@@ -107,10 +113,11 @@ async def get_current_user(
 async def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: Session = Depends(get_db),
+    request: Request = None,
 ) -> Optional[Dict[str, Any]]:
     if credentials is None:
         return None
-    return await get_current_user(credentials, db)
+    return await get_current_user(credentials, db, request)
 
 
 def require_roles(*roles: str):

@@ -1,11 +1,5 @@
-import { NextResponse } from "next/server";
+import { forwardAuth } from "@/lib/serverAuth";
 
-export async function POST() {
-  const response = NextResponse.json({ ok: true });
-  response.cookies.set("refresh_token", "", {
-    httpOnly: true,
-    path: "/",
-    maxAge: 0,
-  });
-  return response;
+export async function POST(request: Request) {
+  return forwardAuth(request, "logout");
 }

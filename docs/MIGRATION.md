@@ -19,14 +19,26 @@ runtime denies. Browser interaction testing remains outstanding.
 
 ## 2. Authentication and deployment
 
-- Route login, refresh, and logout through the backend authority.
-- Separate internal Docker service addresses from browser API addresses.
-- Verify expiry, refresh, disabled users, logout auditing, and container startup.
-- Restore the required rate limits with isolated test configuration.
+Implemented:
+- Login, refresh, and logout now use the backend authority; remove frontend signing.
+- Restore sessions from the backend and renew access tokens before expiry.
+- Separate internal Docker addresses, browser API addresses, and browser origins.
+- Restore specified rate limits with atomic Redis counters and explicit isolated
+  test overrides. Redis failure returns 503 unless memory fallback is opted into.
+- Build development frontend and backend images with optional proxy CA trust.
+
+Validation: 49 API/security/dashboard/reporting tests, 8 auth/limiter regressions,
+TypeScript checks, Compose validation, and frontend/backend authentication over
+Docker networking (including different backend signing key, refresh, disabled
+accounts, logout audit, cookie clearing, and browser Origin checks).
+Production frontend builds remain blocked by Google Fonts network access; full
+face-service container deployment and browser UI validation remain outstanding.
+See [authentication/deployment notes](AUTH-DEPLOYMENT.md) for commands and limits.
 
 ## 3. Real student attendance workflow
 
 - Replace local mock success and seeded history with backend records.
+- Persist profile/password changes instead of local-only placeholder behavior.
 - Integrate registration, consent persistence, face enrollment, camera capture,
   geolocation, session selection, and device registration.
 - Submit fresh server-issued liveness/device challenges and display actual
@@ -36,6 +48,7 @@ runtime denies. Browser interaction testing remains outstanding.
 ## 4. Security and privacy
 
 - Enforce challenge freshness and service-failure behavior consistently.
+- Add server-side session revocation for copied tokens after logout.
 - Implement impossible-travel checks and test network lookup failures.
 - Add account deletion scheduling and personal-data cleanup.
 - Limit stored location precision and remove precise coordinates from logs.

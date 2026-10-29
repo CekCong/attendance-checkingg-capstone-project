@@ -1,4 +1,5 @@
 import uuid
+import os
 import math
 import json
 import enum
@@ -8,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from sqlalchemy.orm import Session
 from ..security import get_current_user
-from ..rate_limit import client_ip
+from ..rate_limit import client_ip, enforce_rate_limit
 from ..database import get_db as shared_get_db
 from ..models import CheckinModel, DeviceModel, EnrollmentModel, SessionModel, UserModel as User
 from ..audit import add_audit_log
@@ -645,6 +646,9 @@ async def create_checkin(
         )
 
     student_id = str(current_user.get("id"))
+    enforce_rate_limit(
+        f"checkin:{student_id}", int(os.getenv("CHECKIN_RATE_LIMIT", "10")), 60,
+    )
     session_id = str(payload.session_id)
 
     session_obj = db.query(SessionModel).filter(SessionModel.id == session_id).first()

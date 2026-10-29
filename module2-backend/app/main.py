@@ -211,7 +211,9 @@ async def metrics():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8501"],
+    allow_origins=[origin.strip() for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8501"
+    ).split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

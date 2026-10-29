@@ -13,7 +13,7 @@ from passlib.context import CryptContext
 import os
 from dotenv import load_dotenv
 import uuid
-from ..rate_limit import check_rate_limit as apply_rate_limit
+from ..rate_limit import check_rate_limit as apply_rate_limit, enforce_rate_limit
 from ..audit import add_audit_log
 from ..security import (
     create_access_token,
@@ -38,8 +38,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 MAX_FAILED_ATTEMPTS = 10
 Role = Literal["student", "ta", "instructor", "admin"]
 REFRESH_COOKIE = "refresh_token"
-REGISTRATION_RATE_LIMIT = int(os.getenv("REGISTRATION_RATE_LIMIT", "100000"))
-LOGIN_RATE_LIMIT = 100000
+REGISTRATION_RATE_LIMIT = int(os.getenv("REGISTRATION_RATE_LIMIT", "10"))
+LOGIN_RATE_LIMIT = int(os.getenv("LOGIN_RATE_LIMIT", "60"))
 
 def check_rate_limit(key: str, limit: int, window: int) -> bool:
     allowed, _remaining = apply_rate_limit(key, limit, window)
@@ -79,7 +79,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
         key=REFRESH_COOKIE,
         value=token,
         httponly=True,
-        secure=False,
+        secure=os.getenv("COOKIE_SECURE", "false").lower() == "true",
         samesite="lax",
         max_age=7 * 24 * 60 * 60,
         path="/",
@@ -146,7 +146,7 @@ async def login(
     response: Response, 
     db: Session = Depends(get_db)
 ):
-    # Rate Limiting: 100,000 login attempts per hour keyed by IP address
+    # Rate limit login attempts per hour, keyed by peer IP.
     client_ip = request.client.host if request.client else "unknown"
     if not check_rate_limit(
         f"rate_limit:login:{client_ip}",
@@ -304,6 +304,7 @@ async def refresh(
             detail="Account disabled",
         )
 
+    enforce_rate_limit(f"api:{user.id}", int(os.getenv("API_RATE_LIMIT", "1000")), 3600)
     token_user = {"id": user.id, "email": user.email, "role": user.role}
     new_access = create_access_token(token_user)
     new_refresh = create_refresh_token(token_user)
@@ -315,6 +316,7 @@ async def refresh(
         "access_token": new_access,
         "refresh_token": new_refresh,
         "token_type": "bearer",
+        "user": user_response(user),
     }
 
 
