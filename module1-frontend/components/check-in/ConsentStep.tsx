@@ -16,7 +16,7 @@ export function ConsentStep({
   onConfirm,
   onCancel,
 }: ConsentStepProps) {
-  const canContinue = consent.camera;
+  const canContinue = consent.camera && consent.geolocation;
 
   return (
     <GlassCard className="w-full max-w-md p-7 animate-fade-up">
@@ -38,7 +38,9 @@ export function ConsentStep({
             className="mt-1 h-4 w-4 accent-emerald-400"
           />
           <span>
-            <span className="block font-semibold text-white">Camera access</span>
+            <span className="block font-semibold text-white">
+              Camera access
+            </span>
             <span className="mt-1 block text-sm text-white/70">
               Capture a live selfie stream for a short liveness challenge. No
               photos are kept on this device.
@@ -58,7 +60,8 @@ export function ConsentStep({
               Geolocation access
             </span>
             <span className="mt-1 block text-sm text-white/70">
-              Location is skipped in this preview. You can leave this unchecked.
+              Use your current location to check that you are at the class
+              venue.
             </span>
           </span>
         </label>

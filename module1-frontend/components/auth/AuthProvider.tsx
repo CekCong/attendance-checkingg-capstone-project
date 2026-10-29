@@ -10,6 +10,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { studentRequest } from "@/lib/studentApi";
 import type { AuthUser, UserRole } from "@/lib/authTypes";
 import {
   clearStoredProfile,
@@ -32,8 +33,11 @@ type AuthContextValue = {
   accessToken: string | null;
   login: (email: string, password: string, role: UserRole) => Promise<void>;
   logout: () => Promise<void>;
-  updateProfile: (patch: ProfileUpdate) => void;
-  changePassword: (currentPassword: string, nextPassword: string) => Promise<void>;
+  updateProfile: (patch: ProfileUpdate) => Promise<void>;
+  changePassword: (
+    currentPassword: string,
+    nextPassword: string,
+  ) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -41,7 +45,9 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 function tokenExpiry(token: string): number {
   try {
     const payload = token.split(".")[1];
-    return JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))).exp * 1000;
+    return (
+      JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))).exp * 1000
+    );
   } catch {
     return 0;
   }
@@ -69,19 +75,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  const acceptSession = useCallback((data: { access_token: string; user: AuthUser }) => {
-    const next = mergeProfile(normalizeUser(data.user));
-    sessionStorage.setItem(ACCESS_STORAGE_KEY, data.access_token);
-    saveStoredProfile(next);
-    setAccessToken(data.access_token);
-    setUser(next);
-  }, []);
+  const acceptSession = useCallback(
+    (data: { access_token: string; user: AuthUser }) => {
+      const next = mergeProfile(normalizeUser(data.user));
+      sessionStorage.setItem(ACCESS_STORAGE_KEY, data.access_token);
+      saveStoredProfile(next);
+      setAccessToken(data.access_token);
+      setUser(next);
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     const currentGeneration = generation.current;
     try {
       const response = await fetch("/api/auth/refresh", {
-        method: "POST", credentials: "include", cache: "no-store",
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
       });
       if (!response.ok) throw new Error("Session refresh failed");
       const data = await response.json();
@@ -94,8 +105,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     // Restore identity from the backend, never from unverified cached claims.
-    void refresh().finally(() => { if (active) setReady(true); });
-    return () => { active = false; generation.current += 1; };
+    void refresh().finally(() => {
+      if (active) setReady(true);
+    });
+    return () => {
+      active = false;
+      generation.current += 1;
+    };
   }, [refresh]);
 
   useEffect(() => {
@@ -103,61 +119,83 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const renew = () => {
       if (tokenExpiry(accessToken) - Date.now() < 60_000) void refresh();
     };
-    const timer = window.setTimeout(() => void refresh(), Math.max(0, tokenExpiry(accessToken) - Date.now() - 60_000));
+    const timer = window.setTimeout(
+      () => void refresh(),
+      Math.max(0, tokenExpiry(accessToken) - Date.now() - 60_000),
+    );
     window.addEventListener("focus", renew);
-    return () => { window.clearTimeout(timer); window.removeEventListener("focus", renew); };
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", renew);
+    };
   }, [accessToken, refresh]);
 
-  const login = useCallback(async (email: string, password: string, role: UserRole) => {
-    const response = await fetch("/api/auth/login", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, role }),
-    });
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      throw new Error(detail.detail || "Login failed");
-    }
-    const data = (await response.json()) as {
-      access_token: string;
-      user: AuthUser;
-    };
-    generation.current += 1;
-    acceptSession(data);
-  }, [acceptSession]);
+  const login = useCallback(
+    async (email: string, password: string, role: UserRole) => {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, role }),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail || "Login failed");
+      }
+      const data = (await response.json()) as {
+        access_token: string;
+        user: AuthUser;
+      };
+      generation.current += 1;
+      acceptSession(data);
+    },
+    [acceptSession],
+  );
 
   const logout = useCallback(async () => {
     generation.current += 1;
     clearSession();
     const response = await fetch("/api/auth/logout", {
-      method: "POST", credentials: "include",
+      method: "POST",
+      credentials: "include",
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
     });
-    if (!response.ok) throw new Error("Signed out locally, but server logout could not be confirmed");
+    if (!response.ok)
+      throw new Error(
+        "Signed out locally, but server logout could not be confirmed",
+      );
   }, [accessToken, clearSession]);
 
-  const updateProfile = useCallback((patch: ProfileUpdate) => {
-    setUser((current) => {
-      if (!current) return current;
-      const next = { ...current, ...patch };
+  const updateProfile = useCallback(
+    async (patch: ProfileUpdate) => {
+      if (!accessToken) throw new Error("Please sign in again.");
+      const saved = await studentRequest<AuthUser>("/users/me", accessToken, {
+        method: "PUT",
+        body: JSON.stringify({ full_name: patch.full_name }),
+      });
+      const next = normalizeUser({
+        ...saved,
+        language: patch.language ?? user?.language ?? "en",
+      });
       saveStoredProfile(next);
-      return next;
-    });
-  }, []);
+      setUser(next);
+    },
+    [accessToken, user?.language],
+  );
 
-  const changePassword = useCallback(async (currentPassword: string, nextPassword: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    if (!currentPassword || !nextPassword) {
-      throw new Error("Enter your current and new password.");
-    }
-    if (nextPassword.length < 8) {
-      throw new Error("New password must be at least 8 characters.");
-    }
-    if (currentPassword === nextPassword) {
-      throw new Error("New password must be different from the current password.");
-    }
-  }, []);
+  const changePassword = useCallback(
+    async (currentPassword: string, nextPassword: string) => {
+      if (!accessToken) throw new Error("Please sign in again.");
+      await studentRequest("/auth/password", accessToken, {
+        method: "POST",
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: nextPassword,
+        }),
+      });
+    },
+    [accessToken],
+  );
 
   const value = useMemo(
     () => ({

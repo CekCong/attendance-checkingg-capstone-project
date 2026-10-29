@@ -343,3 +343,35 @@ async def logout(
 @router.get("/me")
 async def me(user=Depends(get_current_user)):
     return user_response(user)
+
+class PasswordChangeBody(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8, max_length=72)
+
+    @field_validator("new_password")
+    @classmethod
+    def bcrypt_length(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be at most 72 UTF-8 bytes")
+        return value
+
+
+@router.post("/password")
+def change_password(
+    body: PasswordChangeBody,
+    request: Request,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(UserModel).filter(UserModel.id == current_user["id"]).one()
+    enforce_rate_limit(f"password:{user.id}", 10, 3600)
+    if not verify_password(body.current_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if body.current_password == body.new_password:
+        raise HTTPException(status_code=400, detail="Choose a different password")
+    user.hashed_password = get_password_hash(body.new_password)
+    user.failed_login_attempts = 0
+    add_audit_log(db, request, "user_updated", user_id=user.id,
+                  resource_type="user", resource_id=user.id, details="updated_fields=password")
+    db.commit()
+    return {"ok": True}

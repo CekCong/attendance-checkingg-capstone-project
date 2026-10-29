@@ -1,149 +1,213 @@
 "use client";
-
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { StudentDashboard } from "@/components/dashboards/StudentDashboard";
-import { submitCheckIn } from "@/lib/mockApi";
-import { appendLessonHistory } from "@/lib/attendanceHistory";
-import type { ConsentState } from "@/lib/types";
 import {
-  initialWorkflowState,
-  workflowReducer,
-} from "@/lib/workflowReducer";
+  studentRequest,
+  type StudentSession,
+  type StudentProfile,
+  type LivenessTicket,
+} from "@/lib/studentApi";
+import { prepareDevice, signDevice } from "@/lib/deviceIdentity";
+import type {
+  CheckInResult,
+  ConsentState,
+  GeoCoordinates,
+  WorkflowStep,
+} from "@/lib/types";
 import { ConsentStep } from "./ConsentStep";
-import { IdleStep } from "./IdleStep";
+import { GeolocationStep } from "./GeolocationStep";
 import { LivenessChallenge } from "./LivenessChallenge";
 import { ResultStep, SubmittingStep } from "./ResultStep";
 import { StepIndicator } from "./StepIndicator";
 
 export function CheckInWorkflow() {
-  const { user } = useAuth();
-  const [state, dispatch] = useReducer(workflowReducer, initialWorkflowState);
-  const submittingRef = useRef(false);
-  const [historyVersion, setHistoryVersion] = useState(0);
-
-  const handleConsentChange = useCallback((partial: Partial<ConsentState>) => {
-    dispatch({ type: "SET_CONSENT", payload: partial });
+  const { user, accessToken } = useAuth();
+  const [step, setStep] = useState<WorkflowStep>("IDLE");
+  const [session, setSession] = useState<StudentSession | null>(null);
+  const [qrCode, setQrCode] = useState("");
+  const [consent, setConsent] = useState<ConsentState>({
+    camera: false,
+    geolocation: false,
+  });
+  const [coordinates, setCoordinates] = useState<GeoCoordinates | null>(null);
+  const [result, setResult] = useState<CheckInResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const device = useRef<Awaited<ReturnType<typeof prepareDevice>> | null>(null);
+  const busy = useRef(false);
+  const operation = useRef(0);
+  const fail = useCallback((message: string) => {
+    setCoordinates(null);
+    setError(message);
+    setStep("ERROR");
+  }, []);
+  const located = useCallback((value: GeoCoordinates) => {
+    setCoordinates(value);
+    setStep("LIVENESS_CHALLENGE");
   }, []);
 
-  const handleLivenessComplete = useCallback((frameBase64: string) => {
-    dispatch({ type: "LIVENESS_COMPLETE", payload: { frameBase64 } });
-  }, []);
-
-  const handleLivenessError = useCallback((message: string) => {
-    dispatch({ type: "SUBMIT_ERROR", payload: message });
-  }, []);
-
-  useEffect(() => {
-    if (state.step !== "SUBMITTING") {
-      submittingRef.current = false;
+  function reset() {
+    operation.current += 1;
+    setStep("IDLE");
+    setSession(null);
+    setCoordinates(null);
+    setResult(null);
+    setError(null);
+    setConsent({ camera: false, geolocation: false });
+    device.current = null;
+  }
+  async function begin() {
+    if (
+      !accessToken ||
+      !user ||
+      !consent.camera ||
+      !consent.geolocation ||
+      busy.current
+    )
       return;
+    busy.current = true;
+    const current = operation.current;
+    setStep("PREPARING");
+    try {
+      const profile = await studentRequest<StudentProfile>(
+        "/users/me",
+        accessToken,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            camera_consent: true,
+            geolocation_consent: true,
+          }),
+        },
+      );
+      device.current = await prepareDevice(user.id, accessToken);
+      if (current === operation.current)
+        setStep(profile.face_enrolled ? "GEOLOCATION" : "ENROLLMENT");
+    } catch (e) {
+      if (current === operation.current)
+        fail(
+          e instanceof Error ? e.message : "Unable to prepare verification.",
+        );
+    } finally {
+      busy.current = false;
     }
-
-    if (submittingRef.current) return;
-    submittingRef.current = true;
-
-    const { frameBase64, coordinates, consentedAt, classCode, classTitle } = state;
-
-    if (!frameBase64 || !consentedAt || !classCode) {
-      dispatch({
-        type: "SUBMIT_ERROR",
-        payload: "Missing check-in data. Please restart from the dashboard.",
-      });
+  }
+  async function enroll(frame: string) {
+    const current = operation.current;
+    await studentRequest("/users/me/face/enroll", accessToken, {
+      method: "POST",
+      body: JSON.stringify({ image: frame.split(",")[1] }),
+    });
+    if (current === operation.current) setStep("GEOLOCATION");
+  }
+  async function submit(frames: string[], ticket: LivenessTicket) {
+    if (
+      !session ||
+      !coordinates ||
+      !device.current ||
+      !accessToken ||
+      busy.current
+    )
       return;
+    busy.current = true;
+    setStep("SUBMITTING");
+    try {
+      const attestation = await signDevice(
+        device.current,
+        session.id,
+        accessToken,
+      );
+      const saved = await studentRequest<CheckInResult>(
+        "/checkins/",
+        accessToken,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: session.id,
+            ...attestation,
+            latitude: coordinates.latitude,
+            longitude: coordinates.longitude,
+            location_accuracy_meters: coordinates.accuracy,
+            liveness_challenge_response: frames,
+            liveness_challenge_id: ticket.challenge_id,
+            liveness_challenge_type: ticket.challenge_type,
+            ...(qrCode ? { qr_code: qrCode } : {}),
+          }),
+        },
+      );
+      setCoordinates(null);
+      setResult(saved);
+      setStep("SUCCESS");
+    } catch (e) {
+      fail(
+        e instanceof Error
+          ? e.message
+          : "Submission failed. Refresh history before retrying if your connection was interrupted.",
+      );
+    } finally {
+      busy.current = false;
     }
-
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const result = await submitCheckIn({
-          frameBase64,
-          coordinates,
-          consentedAt,
-          classCode,
-        });
-
-        if (cancelled) return;
-
-        if (result.ok) {
-          if (user) {
-            appendLessonHistory(user.email, {
-              id: result.verificationId ?? `CHK-${Date.now()}`,
-              classCode: result.classCode ?? classCode,
-              classTitle: result.classTitle ?? classTitle ?? classCode,
-              verifiedAt: new Date().toISOString(),
-            });
-            setHistoryVersion((n) => n + 1);
-          }
-          dispatch({ type: "SUBMIT_SUCCESS", payload: result });
-        } else {
-          dispatch({ type: "SUBMIT_ERROR", payload: result.message });
-        }
-      } catch {
-        if (!cancelled) {
-          dispatch({
-            type: "SUBMIT_ERROR",
-            payload: "Network error while submitting check-in. Please retry.",
-          });
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.step]);
-
+  }
+  if (!user || !accessToken) return null;
+  if (user.role !== "student")
+    return (
+      <p className="p-6">
+        Sign in with a student account to submit attendance.
+      </p>
+    );
   return (
-    <div className="flex w-full max-w-lg flex-col items-center px-4 py-4 sm:py-8">
-      <StepIndicator step={state.step} />
-
-      {state.step === "IDLE" && user && (
+    <div className="flex w-full max-w-lg flex-col items-center gap-4 px-4 py-6">
+      <StepIndicator step={step} />
+      {step === "IDLE" && (
         <StudentDashboard
-          email={user.email}
-          historyVersion={historyVersion}
-          onStartCheckIn={(classCode, classTitle) =>
-            dispatch({ type: "START", payload: { classCode, classTitle } })
-          }
+          token={accessToken}
+          onStartCheckIn={(selected, code) => {
+            setSession(selected);
+            setQrCode(code);
+            setStep("CONSENT");
+          }}
         />
       )}
-
-      {state.step === "IDLE" && !user && (
-        <IdleStep onStart={() => dispatch({ type: "START", payload: { classCode: "DEMO", classTitle: "Demo" } })} />
-      )}
-
-      {state.step === "CONSENT" && (
+      {step === "CONSENT" && (
         <ConsentStep
-          consent={state.consent}
-          onChange={handleConsentChange}
-          onConfirm={() => dispatch({ type: "CONFIRM_CONSENT" })}
-          onCancel={() => dispatch({ type: "RESET" })}
+          consent={consent}
+          onChange={(partial) =>
+            setConsent((previous) => ({ ...previous, ...partial }))
+          }
+          onConfirm={() => void begin()}
+          onCancel={reset}
         />
       )}
-
-      {state.step === "LIVENESS_CHALLENGE" && (
+      {step === "PREPARING" && (
+        <p>Saving consent and registering this device…</p>
+      )}
+      {(step === "ENROLLMENT" || step === "LIVENESS_CHALLENGE") && session && (
         <LivenessChallenge
-          onComplete={handleLivenessComplete}
-          onError={handleLivenessError}
+          key={step}
+          token={accessToken}
+          sessionId={session.id}
+          enrollment={step === "ENROLLMENT"}
+          onEnroll={enroll}
+          onComplete={submit}
+          onError={fail}
         />
       )}
-
-      {state.step === "SUBMITTING" && (
-        <SubmittingStep
-          hasFrame={Boolean(state.frameBase64)}
-          coordinates={state.coordinates}
-        />
+      {step === "GEOLOCATION" && (
+        <GeolocationStep onComplete={located} onError={fail} />
       )}
-
-      {(state.step === "SUCCESS" || state.step === "ERROR") && (
+      {step === "SUBMITTING" && <SubmittingStep />}
+      {(step === "SUCCESS" || step === "ERROR") && (
         <ResultStep
-          variant={state.step}
-          result={state.result}
-          errorMessage={state.errorMessage}
-          onReset={() => dispatch({ type: "RESET" })}
+          variant={step}
+          result={result}
+          errorMessage={error}
+          onReset={reset}
         />
+      )}
+      {["ENROLLMENT", "GEOLOCATION", "LIVENESS_CHALLENGE"].includes(step) && (
+        <button onClick={reset} className="underline">
+          Cancel verification
+        </button>
       )}
     </div>
   );

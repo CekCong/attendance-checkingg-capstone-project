@@ -37,15 +37,18 @@ export function ProfileForm() {
       return;
     }
     setPendingProfile(true);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    updateProfile({
-      username: username.trim(),
-      full_name: fullName.trim(),
-      email: email.trim(),
-      language,
-    });
-    setPendingProfile(false);
-    setProfileMessage("Profile saved.");
+    try {
+      await updateProfile({ full_name: fullName.trim(), language });
+      setProfileMessage(
+        "Profile saved. Language preference applies to this device.",
+      );
+    } catch (err) {
+      setProfileError(
+        err instanceof Error ? err.message : "Could not save profile.",
+      );
+    } finally {
+      setPendingProfile(false);
+    }
   }
 
   async function onChangePassword(event: FormEvent) {
@@ -64,7 +67,9 @@ export function ProfileForm() {
       setConfirmPassword("");
       setPasswordMessage("Password updated.");
     } catch (err) {
-      setPasswordError(err instanceof Error ? err.message : "Could not update password.");
+      setPasswordError(
+        err instanceof Error ? err.message : "Could not update password.",
+      );
     } finally {
       setPendingPassword(false);
     }
@@ -80,19 +85,21 @@ export function ProfileForm() {
           Profile
         </h1>
         <p className="mt-1 text-sm text-white/75">
-          Manage your account. Changes are stored on this device for the current
-          session.
+          Your display name and password are saved to your account. Appearance
+          and language preferences apply to this device.
         </p>
       </div>
 
       <GlassCard className="p-6 sm:p-7">
-        <h2 className="font-display text-xl font-semibold text-white">Account</h2>
+        <h2 className="font-display text-xl font-semibold text-white">
+          Account
+        </h2>
         <form className="mt-5 space-y-4" onSubmit={onSaveProfile}>
           <label className="block text-sm font-medium text-white/90">
             Username
             <input
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              readOnly
               autoComplete="username"
               className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none focus:border-white/60"
             />
@@ -111,7 +118,7 @@ export function ProfileForm() {
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              readOnly
               autoComplete="email"
               className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none focus:border-white/60"
             />
@@ -130,8 +137,14 @@ export function ProfileForm() {
               ))}
             </select>
           </label>
-          {profileError && <p className="text-sm text-rose-200">{profileError}</p>}
-          {profileMessage && <p className="text-sm text-emerald-600 dark:text-emerald-200">{profileMessage}</p>}
+          {profileError && (
+            <p className="text-sm text-rose-200">{profileError}</p>
+          )}
+          {profileMessage && (
+            <p className="text-sm text-emerald-600 dark:text-emerald-200">
+              {profileMessage}
+            </p>
+          )}
           <button
             type="submit"
             disabled={pendingProfile}
@@ -143,9 +156,12 @@ export function ProfileForm() {
       </GlassCard>
 
       <GlassCard className="p-6 sm:p-7">
-        <h2 className="font-display text-xl font-semibold text-white">Appearance</h2>
+        <h2 className="font-display text-xl font-semibold text-white">
+          Appearance
+        </h2>
         <p className="mt-1 text-sm text-white/70">
-          Default follows your device. Light uses a pale base; dark uses a near-black base.
+          Default follows your device. Light uses a pale base; dark uses a
+          near-black base.
         </p>
         <div className="mt-4 grid grid-cols-3 gap-2">
           {(
@@ -172,20 +188,27 @@ export function ProfileForm() {
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3">
           <div className="rounded-2xl border border-slate-200 bg-slate-100 p-3 text-slate-900">
-            <p className="text-xs font-semibold uppercase tracking-wide">Light</p>
+            <p className="text-xs font-semibold uppercase tracking-wide">
+              Light
+            </p>
             <p className="mt-1 text-sm">Pale gray-white canvas</p>
           </div>
           <div className="rounded-2xl border border-slate-700 bg-slate-950 p-3 text-slate-100">
-            <p className="text-xs font-semibold uppercase tracking-wide">Dark</p>
+            <p className="text-xs font-semibold uppercase tracking-wide">
+              Dark
+            </p>
             <p className="mt-1 text-sm">Near-black canvas</p>
           </div>
         </div>
       </GlassCard>
 
       <GlassCard className="p-6 sm:p-7">
-        <h2 className="font-display text-xl font-semibold text-white">Password</h2>
+        <h2 className="font-display text-xl font-semibold text-white">
+          Password
+        </h2>
         <p className="mt-1 text-sm text-white/70">
-          Password updates are stubbed and are not sent to a server yet.
+          Use your current password to set a new password of at least 8
+          characters.
         </p>
         <form className="mt-5 space-y-4" onSubmit={onChangePassword}>
           <label className="block text-sm font-medium text-white/90">
@@ -218,8 +241,12 @@ export function ProfileForm() {
               className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none focus:border-white/60"
             />
           </label>
-          {passwordError && <p className="text-sm text-rose-200">{passwordError}</p>}
-          {passwordMessage && <p className="text-sm text-emerald-200">{passwordMessage}</p>}
+          {passwordError && (
+            <p className="text-sm text-rose-200">{passwordError}</p>
+          )}
+          {passwordMessage && (
+            <p className="text-sm text-emerald-200">{passwordMessage}</p>
+          )}
           <button
             type="submit"
             disabled={pendingPassword}

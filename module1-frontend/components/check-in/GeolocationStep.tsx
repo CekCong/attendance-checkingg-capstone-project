@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { GeoCoordinates } from "@/lib/types";
 import { GlassCard } from "./GlassCard";
 
@@ -24,9 +24,10 @@ function mapGeoError(error: GeolocationPositionError): string {
 
 export function GeolocationStep({ onComplete, onError }: GeolocationStepProps) {
   const [status, setStatus] = useState<"requesting" | "reading">("requesting");
-  const finished = useRef(false);
 
   useEffect(() => {
+    let active = true;
+    let finished = false;
     if (!("geolocation" in navigator)) {
       onError("This browser does not support geolocation.");
       return;
@@ -36,8 +37,8 @@ export function GeolocationStep({ onComplete, onError }: GeolocationStepProps) {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        if (finished.current) return;
-        finished.current = true;
+        if (!active || finished) return;
+        finished = true;
         onComplete({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
@@ -45,8 +46,8 @@ export function GeolocationStep({ onComplete, onError }: GeolocationStepProps) {
         });
       },
       (error) => {
-        if (finished.current) return;
-        finished.current = true;
+        if (!active || finished) return;
+        finished = true;
         onError(mapGeoError(error));
       },
       {
@@ -55,6 +56,9 @@ export function GeolocationStep({ onComplete, onError }: GeolocationStepProps) {
         maximumAge: 0,
       },
     );
+    return () => {
+      active = false;
+    };
   }, [onComplete, onError]);
 
   return (

@@ -1,147 +1,151 @@
 "use client";
-
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { GlassCard } from "@/components/check-in/GlassCard";
-import { KNOWN_CLASSES, lookupClass } from "@/lib/classes";
-import { loadLessonHistory } from "@/lib/attendanceHistory";
-import type { LessonHistoryItem } from "@/lib/types";
-
-type StudentDashboardProps = {
-  email: string;
-  historyVersion: number;
-  onStartCheckIn: (classCode: string, classTitle: string) => void;
-};
-
-function formatWhen(iso: string) {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(iso));
-  } catch {
-    return iso;
-  }
-}
+import {
+  studentRequest,
+  serverTime,
+  type StudentSession,
+  type Attendance,
+} from "@/lib/studentApi";
 
 export function StudentDashboard({
-  email,
-  historyVersion,
+  token,
   onStartCheckIn,
-}: StudentDashboardProps) {
-  const [code, setCode] = useState("");
-  const [scanning, setScanning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<LessonHistoryItem[]>([]);
-
+}: {
+  token: string;
+  onStartCheckIn: (session: StudentSession, qrCode: string) => void;
+}) {
+  const [sessions, setSessions] = useState<StudentSession[]>([]);
+  const [history, setHistory] = useState<Attendance[]>([]);
+  const [selected, setSelected] = useState("");
+  const [qrCode, setQrCode] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
-    setHistory(loadLessonHistory(email));
-  }, [email, historyVersion]);
-
-  const hint = useMemo(
-    () => KNOWN_CLASSES.map((item) => item.code).join(", "),
-    [],
+    let active = true;
+    setLoading(true);
+    void Promise.all([
+      studentRequest<StudentSession[]>(
+        "/sessions/my-sessions?status=active&limit=100",
+        token,
+      ),
+      studentRequest<Attendance[]>("/checkins/my-checkins?limit=100", token),
+    ])
+      .then(([items, records]) => {
+        if (active) {
+          setSessions(items);
+          setHistory(records);
+          setError("");
+        }
+      })
+      .catch((e) => {
+        if (active) setError(e.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [token, revision]);
+  const session = sessions.find((item) => item.id === selected);
+  const openSessions = sessions.filter(
+    (item) =>
+      serverTime(item.checkin_opens_at) <= Date.now() &&
+      serverTime(item.checkin_closes_at) >= Date.now(),
   );
-
-  function startWithCode(raw: string) {
-    const found = lookupClass(raw);
-    if (!found) {
-      setError("Enter a class code or scan a session QR.");
-      return;
-    }
-    setError(null);
-    onStartCheckIn(found.code, found.title);
-  }
-
-  function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    startWithCode(code);
-  }
-
-  function simulateScan() {
-    setScanning(true);
-    setError(null);
-    window.setTimeout(() => {
-      const sample = KNOWN_CLASSES[0];
-      setCode(sample.code);
-      setScanning(false);
-      onStartCheckIn(sample.code, sample.title);
-    }, 900);
-  }
-
   return (
-    <div className="flex w-full max-w-lg flex-col gap-4 px-4 py-6 animate-fade-up sm:py-8">
-      <GlassCard className="p-6 sm:p-8">
-        <p className="text-sm font-medium uppercase tracking-[0.2em] text-white/70">
-          Student dashboard
-        </p>
-        <h1 className="mt-1 font-display text-3xl font-semibold text-white">
+    <div className="flex w-full flex-col gap-4">
+      <GlassCard className="p-6">
+        <h1 className="font-display text-3xl font-semibold text-white">
           Join a class
         </h1>
-        <p className="mt-2 text-sm leading-relaxed text-white/80">
-          Scan the session QR or enter the class code, then complete a short
-          verification. Face and location checks are stubbed for now.
+        <p className="mt-2 text-white/80">
+          Choose an active session for a course you are enrolled in.
         </p>
-
-        <div className="relative mt-5 overflow-hidden rounded-2xl border border-white/20 bg-sky-950/40">
-          <div className="flex aspect-[4/3] flex-col items-center justify-center gap-3 p-6">
-            <div className="h-28 w-28 rounded-xl border-2 border-dashed border-white/50" />
-            <p className="text-sm text-white/75">
-              {scanning ? "Looking for a QR code…" : "QR scanner (stub)"}
-            </p>
-            <button
-              type="button"
-              disabled={scanning}
-              onClick={simulateScan}
-              className="rounded-2xl bg-white/90 px-5 py-2.5 text-sm font-semibold text-sky-950 disabled:opacity-60"
-            >
-              {scanning ? "Scanning…" : "Scan class QR"}
-            </button>
-          </div>
-        </div>
-
-        <form className="mt-5 space-y-3" onSubmit={onSubmit}>
-          <label className="block text-sm font-medium text-white/90">
-            Or enter class code
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="e.g. CS101-L4"
-              className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 uppercase tracking-wide text-white outline-none placeholder:normal-case placeholder:tracking-normal placeholder:text-white/40"
-            />
-          </label>
-          <p className="text-xs text-white/55">Demo codes: {hint}</p>
-          {error && <p className="text-sm text-rose-200">{error}</p>}
-          <button
-            type="submit"
-            className="w-full rounded-2xl bg-white/90 px-6 py-3.5 text-base font-semibold text-sky-950 shadow-lg transition hover:bg-white"
-          >
-            Continue to verification
-          </button>
-        </form>
-      </GlassCard>
-
-      <GlassCard className="p-6 sm:p-7">
-        <h2 className="font-display text-xl font-semibold text-white">
-          Verified lessons
-        </h2>
-        <p className="mt-1 text-sm text-white/70">
-          Previous check-ins for this session.
-        </p>
-        {history.length === 0 ? (
-          <p className="mt-4 text-sm text-white/60">No verified lessons yet.</p>
+        {loading ? (
+          <p className="mt-4">Loading sessions…</p>
         ) : (
-          <ul className="mt-4 divide-y divide-white/10">
-            {history.map((item) => (
-              <li key={item.id} className="py-3">
-                <p className="font-medium text-white">{item.classTitle}</p>
-                <p className="text-xs uppercase tracking-wide text-white/60">
-                  {item.classCode}
-                </p>
-                <p className="mt-1 text-sm text-white/75">{formatWhen(item.verifiedAt)}</p>
-              </li>
-            ))}
-          </ul>
+          <>
+            {openSessions.length === 0 && (
+              <p className="mt-4">
+                No sessions are open. Ask your instructor about course
+                enrollment or the check-in window.
+              </p>
+            )}
+            <label className="mt-4 block">
+              Session
+              <select
+                aria-label="Session"
+                value={selected}
+                onChange={(e) => {
+                  setSelected(e.target.value);
+                  setQrCode("");
+                }}
+                className="mt-2 w-full rounded-xl bg-sky-950 p-3 text-white"
+              >
+                <option value="">Select a session</option>
+                {openSessions.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {session?.qr_code_enabled && (
+              <label className="mt-4 block">
+                Session verification code
+                <input
+                  value={qrCode}
+                  onChange={(e) => setQrCode(e.target.value)}
+                  className="mt-2 w-full rounded-xl bg-sky-950 p-3 text-white"
+                />
+                <span className="text-sm">
+                  Enter the current code provided by your instructor.
+                </span>
+              </label>
+            )}
+            <button
+              disabled={!session || (session.qr_code_enabled && !qrCode.trim())}
+              onClick={() => session && onStartCheckIn(session, qrCode.trim())}
+              className="mt-5 w-full rounded-xl bg-white p-3 font-semibold text-sky-950 disabled:opacity-40"
+            >
+              Continue to verification
+            </button>
+          </>
         )}
+        {error && (
+          <p role="alert" className="mt-3 text-rose-200">
+            {error}
+          </p>
+        )}
+        <button
+          onClick={() => setRevision((v) => v + 1)}
+          className="mt-4 underline"
+        >
+          Refresh sessions and history
+        </button>
+      </GlassCard>
+      <GlassCard className="p-6">
+        <h2 className="text-xl font-semibold">Attendance history</h2>
+        <p className="text-sm">Your latest 100 check-ins.</p>
+        {!history.length && !loading && !error && (
+          <p className="mt-4">No attendance records yet.</p>
+        )}
+        <ul>
+          {history.map((item) => (
+            <li key={item.id} className="border-b border-white/20 py-3">
+              <p>
+                {item.session_name} · {item.course_code}
+              </p>
+              <p className="capitalize">{item.status}</p>
+              <time>
+                {new Date(serverTime(item.checked_in_at)).toLocaleString()}
+              </time>
+            </li>
+          ))}
+        </ul>
       </GlassCard>
     </div>
   );

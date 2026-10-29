@@ -14,8 +14,8 @@ Implemented:
 
 Validation: reporting regressions, API functional tests, observability tests,
 frontend/dashboard HTTP contracts, and frontend TypeScript checking.
-Production builds currently require Google Fonts network access that the cloud
-runtime denies. Browser interaction testing remains outstanding.
+Google Fonts network access is now available and the production frontend build
+has passed. Browser interaction coverage is recorded in Stage 3.
 
 ## 2. Authentication and deployment
 
@@ -31,19 +31,24 @@ Validation: 49 API/security/dashboard/reporting tests, 8 auth/limiter regression
 TypeScript checks, Compose validation, and frontend/backend authentication over
 Docker networking (including different backend signing key, refresh, disabled
 accounts, logout audit, cookie clearing, and browser Origin checks).
-Production frontend builds remain blocked by Google Fonts network access; full
-face-service container deployment and browser UI validation remain outstanding.
+The Google Fonts blocker was resolved before Stage 3; full face-service container
+deployment remains release-validation work.
 See [authentication/deployment notes](AUTH-DEPLOYMENT.md) for commands and limits.
 
 ## 3. Real student attendance workflow
 
-- Replace local mock success and seeded history with backend records.
-- Persist profile/password changes instead of local-only placeholder behavior.
-- Integrate registration, consent persistence, face enrollment, camera capture,
-  geolocation, session selection, and device registration.
-- Submit fresh server-issued liveness/device challenges and display actual
-  approved, flagged, or rejected outcomes.
-- Verify the complete workflow in a browser, including permission denial.
+Implemented:
+- Student registration, backend session selection, and server attendance history.
+- Persisted consent and face enrollment, real camera frames and geolocation.
+- Browser device key registration, signed server challenges, and active liveness.
+- Backend submission with distinct approved, flagged, rejected and pending results.
+- Persisted display-name/password changes and permission/network error handling.
+
+Validation: production build, TypeScript, public/regression suite (112 passed;
+one pre-existing concurrent performance test marked skipped), eight Chromium
+workflow/account tests, mobile viewport, production account persistence, and real face-service
+static replay rejection. See [student workflow notes](STUDENT-WORKFLOW.md).
+Manual real-device positive liveness and camera QR decoding remain outstanding.
 
 ## 4. Security and privacy
 

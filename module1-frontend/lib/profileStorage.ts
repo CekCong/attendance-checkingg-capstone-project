@@ -41,7 +41,7 @@ export function mergeProfile(user: AuthUser): AuthUser {
   return {
     ...user,
     username: stored.username || user.username,
-    full_name: stored.full_name || user.full_name,
+    full_name: user.full_name,
     language: stored.language || user.language,
   };
 }
