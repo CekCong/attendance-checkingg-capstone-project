@@ -60,12 +60,22 @@ def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: fl
     
     return round(R * c, 2)
 
+
+def verification_result(result: Dict[str, Any], prefix: str) -> tuple[bool, float]:
+    passed = result[f"{prefix}_passed"]
+    score = result[f"{prefix}_score"]
+    if type(passed) is not bool or type(score) not in (int, float):
+        raise ValueError("Invalid verification result types")
+    if not math.isfinite(score) or not 0 <= score <= 1:
+        raise ValueError("Invalid verification score")
+    return passed, float(score)
+
 # --- Pydantic Schemas ---
 class CheckinCreate(BaseModel):
     session_id: uuid.UUID
-    latitude: float
-    longitude: float
-    location_accuracy_meters: Optional[float] = None
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    location_accuracy_meters: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
     device_fingerprint: str
     device_signature: Optional[str] = Field(None, max_length=4096)
     device_challenge: Optional[str] = Field(None, max_length=256)
@@ -778,6 +788,17 @@ async def create_checkin(
             detail="User not found.",
         )
 
+    if not student.camera_consent or not student.geolocation_consent:
+        raise HTTPException(403, "Camera and geolocation consent are required.")
+    if session_obj.require_liveness_check:
+        if (not payload.liveness_challenge_id
+                or payload.liveness_challenge_type not in {"blink", "head_turn", "smile"}
+                or not isinstance(payload.liveness_challenge_response, list)
+                or len(payload.liveness_challenge_response) != 15):
+            raise HTTPException(400, "A fresh active liveness challenge and 15 frames are required.")
+        if not student.face_enrolled or not student.face_embedding_hash:
+            raise HTTPException(400, "Face enrollment is required for active liveness.")
+
     device = (
         db.query(DeviceModel)
         .filter(
@@ -791,6 +812,9 @@ async def create_checkin(
         payload.device_signature is not None
         or payload.device_challenge is not None
     )
+    device_binding_required = bool(session_obj.course and session_obj.course.require_device_binding)
+    if device_binding_required and not attestation_supplied:
+        raise HTTPException(400, "A signed, fresh device challenge is required for this course.")
     if attestation_supplied:
         if not payload.device_signature or not payload.device_challenge:
             raise HTTPException(
@@ -830,8 +854,7 @@ async def create_checkin(
                 user_id=student_id,
                 session_id=session_id,
             )
-            liveness_passed = bool(liveness_result["liveness_passed"])
-            liveness_score = float(liveness_result["liveness_score"])
+            liveness_passed, liveness_score = verification_result(liveness_result, "liveness")
             face_embedding_hash = liveness_result.get("face_embedding_hash")
         except FaceServiceError as exc:
             if exc.status_code < 500:
@@ -877,8 +900,7 @@ async def create_checkin(
                     ),
                     student.face_embedding_hash,
                 )
-                face_match_passed = bool(face_result["match_passed"])
-                face_match_score = float(face_result["match_score"])
+                face_match_passed, face_match_score = verification_result(face_result, "match")
                 face_embedding_hash = face_result.get("current_template_hash")
             except FaceServiceError as exc:
                 if exc.status_code < 500:
@@ -897,6 +919,27 @@ async def create_checkin(
     if device is None:
         risk_factors.append({"type": "device_unknown", "severity": "medium", "weight": 0.15})
         local_risk = max(local_risk, 0.15)
+
+    # Use only a previously approved observation; rejected spoof locations must
+    # not poison the travel history. Ignore GPS noise and allow 300 km/h.
+    previous = db.query(CheckinModel).filter(
+        CheckinModel.student_id == student_id,
+        CheckinModel.status == "approved",
+        CheckinModel.latitude.isnot(None), CheckinModel.longitude.isnot(None),
+    ).order_by(CheckinModel.checked_in_at.desc()).first()
+    impossible_travel = False
+    if previous:
+        elapsed = max((now - previous.checked_in_at.replace(tzinfo=None)).total_seconds(), 1)
+        distance = calculate_haversine_distance(
+            previous.latitude, previous.longitude, payload.latitude, payload.longitude,
+        )
+        uncertainty = max(previous.location_accuracy_meters or 0, 100) + max(
+            payload.location_accuracy_meters or 0, 100,
+        )
+        impossible_travel = max(distance - uncertainty, 0) / elapsed > (300_000 / 3600)
+        if impossible_travel:
+            risk_factors.append({"type": "impossible_travel", "severity": "high", "weight": 1.0})
+            local_risk = 1.0
 
     module3_risk = 0.0
     if not module3_unavailable:
@@ -923,6 +966,15 @@ async def create_checkin(
             )
             module3_risk = float(risk_result["risk_score"])
             signal_breakdown = risk_result.get("signal_breakdown", {})
+            if not isinstance(signal_breakdown, dict) or not {"device", "ip_country"}.issubset(signal_breakdown):
+                raise ValueError("Missing risk signals")
+            if any(type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1
+                   for value in signal_breakdown.values()):
+                raise ValueError("Invalid risk signal")
+            if not math.isfinite(module3_risk) or not 0 <= module3_risk <= 1:
+                raise ValueError("Invalid risk score")
+            if device_binding_required and float(signal_breakdown.get("device", 1)) != 0:
+                raise HTTPException(403, "Device signature verification failed.")
             outside_singapore_ip = float(signal_breakdown.get("ip_country", 0.0)) >= 1.0
             for signal_name, signal_risk in signal_breakdown.items():
                 signal_risk = float(signal_risk)
@@ -951,12 +1003,7 @@ async def create_checkin(
             ) from exc
 
     if module3_unavailable:
-        risk_factors.append({
-            "type": "face_service_unavailable",
-            "severity": "high",
-            "weight": 0.50,
-        })
-        local_risk = max(local_risk, 0.50)
+        raise HTTPException(503, "Verification service unavailable. Please retry with fresh challenges.")
 
     total_risk = round(min(max(local_risk, module3_risk), 1.0), 4)
 
@@ -969,7 +1016,8 @@ async def create_checkin(
         checkin_status = CheckinStatus.rejected
     else:
         threshold = session_obj.risk_threshold or 0.50
-        if total_risk >= threshold:
+        network_unknown = float(signal_breakdown.get("ip_country_unknown", 0)) > 0
+        if total_risk >= threshold or impossible_travel or network_unknown or device is None:
             checkin_status = CheckinStatus.flagged
         else:
             checkin_status = CheckinStatus.approved
@@ -981,10 +1029,10 @@ async def create_checkin(
         device_id=device.id if device else None,
         status=checkin_status.value,
         checked_in_at=now,
-        latitude=payload.latitude,
-        longitude=payload.longitude,
+        latitude=round(payload.latitude, 3),
+        longitude=round(payload.longitude, 3),
         location_accuracy_meters=payload.location_accuracy_meters,
-        distance_from_venue_meters=distance_meters,
+        distance_from_venue_meters=round(distance_meters / 100) * 100 if distance_meters is not None else None,
         liveness_passed=liveness_passed,
         liveness_score=liveness_score,
         liveness_challenge_type=(
@@ -1010,7 +1058,7 @@ async def create_checkin(
         resource_id=new_record.id,
         details=(
             f"session_id={session_id}; status={checkin_status.value}; "
-            f"risk_score={total_risk}; latitude={payload.latitude}; longitude={payload.longitude}"
+            f"risk_score={total_risk}"
         ),
         success=checkin_status != CheckinStatus.rejected,
     )

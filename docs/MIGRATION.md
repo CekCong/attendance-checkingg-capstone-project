@@ -52,16 +52,32 @@ Manual real-device positive liveness and camera QR decoding remain outstanding.
 
 ## 4. Security and privacy
 
-- Enforce challenge freshness and service-failure behavior consistently.
-- Add server-side session revocation for copied tokens after logout.
-- Implement impossible-travel checks and test network lookup failures.
-- Add account deletion scheduling and personal-data cleanup.
-- Limit stored location precision and remove precise coordinates from logs.
-- Enforce audit immutability with appropriate database permissions; review
-  instructor access to audit records.
+Implemented:
+- Require both consents, active liveness and signed fresh device challenges
+  according to session/course policy; verification outages fail closed.
+- Revoke copied access/refresh tokens on logout, password changes, deactivation
+  and deletion. Password changes sign the browser out.
+- Flag impossible travel, unknown devices and unavailable country lookups;
+  distinguish unavailable IP data from a confirmed foreign country.
+- Schedule password-confirmed account deletion and erase due personal data;
+  retain disabled tombstones and immutable audit events.
+- Coarsen persisted coordinates and remove coordinates from new audit events.
+- Install database audit guards, provision a restricted runtime role, move schema
+  changes into a separate migration job, and scope instructor audit reads.
+
+Validation: 30 focused security/privacy tests (including real PostgreSQL
+permissions and Redis one-use challenge races), eight Chromium browser tests,
+TypeScript and production build. Combined public/regression run: **136 passed,
+six failed, one pre-existing performance skip**. The six unchanged supplied tests
+expect check-ins without mandatory consent/proofs; they are documented explicitly
+in [security/privacy notes](SECURITY-PRIVACY.md), along with deployment commands,
+audit-retention limits and the distinction between ML doubles and real samples.
+The repeatable migration and owner-level audit trigger were also verified locally.
 
 ## 5. Dashboard completeness and release validation
 
+- Migrate the six legacy check-in fixtures to the full consent/proof workflow
+  without relaxing the enforced policy; rerun the complete suite.
 - Verify pagination, report completeness, scope, and audited exports.
 - Add offline app-shell caching without caching authentication or submissions.
 - Verify mobile behavior, monitoring, Docker deployment, and the full public suite.

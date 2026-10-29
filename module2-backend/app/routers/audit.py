@@ -6,10 +6,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, and_, or_, select
 
 from ..database import get_db
-from ..models import AuditLogModel
+from ..models import AuditLogModel, SessionModel, CheckinModel
+from ..course_access import staff_course_ids
 from ..security import require_roles
 
 
@@ -88,6 +89,16 @@ def get_audit_logs(
     db: Session = Depends(get_db),
 ):
     query = db.query(AuditLogModel)
+    if _user["role"] != "admin":
+        courses = staff_course_ids(db, _user)
+        sessions = select(SessionModel.id).where(SessionModel.course_id.in_(courses))
+        checkins = select(CheckinModel.id).where(CheckinModel.session_id.in_(sessions))
+        query = query.filter(or_(
+            AuditLogModel.user_id == _user["id"],
+            and_(AuditLogModel.resource_type == "course", AuditLogModel.resource_id.in_(courses)),
+            and_(AuditLogModel.resource_type == "session", AuditLogModel.resource_id.in_(sessions)),
+            and_(AuditLogModel.resource_type == "checkin", AuditLogModel.resource_id.in_(checkins)),
+        ))
     if user_id:
         query = query.filter(AuditLogModel.user_id == user_id)
     if action:

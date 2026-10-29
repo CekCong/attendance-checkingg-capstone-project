@@ -26,9 +26,11 @@ submission. Frames are not saved to browser storage. Device keys do not provide
 hardware attestation or protection against arbitrary same-origin script execution.
 
 Profile display-name edits and password changes are saved to the backend. Email
-and username are read-only; language/appearance remain local preferences. Existing
-copied tokens are not yet revoked after password changes or logout; this belongs
-to the next security stage.
+and username are read-only; language/appearance remain local preferences. Password
+changes and logout revoke every account session, including copied tokens. Profile
+also provides password-confirmed account deletion: immediate disablement and
+scheduled personal-data erasure after 30 days, with the security audit trail retained.
+Withdrawing camera consent clears the enrolled face template.
 
 ## Verification
 

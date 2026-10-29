@@ -37,6 +37,7 @@ def create_token(subject: Dict[str, Any], token_type: str, ttl: timedelta) -> st
         "email": subject["email"],
         "role": subject["role"],
         "type": token_type,
+        "av": subject.get("auth_version", 0),
         "iat": int(now.timestamp()),
         "exp": int((now + ttl).timestamp()),
     }
@@ -67,6 +68,19 @@ def decode_token(token: str, expected_type: Optional[str] = None) -> Dict[str, A
     return payload
 
 
+def validate_token_version(payload: Dict[str, Any], user: UserModel) -> None:
+    # Tokens issued before this migration deliberately require a new login.
+    if payload.get("av") != user.auth_version:
+        raise HTTPException(status_code=401, detail="Session revoked. Please sign in again.")
+
+
+def revoke_user_sessions(db: Session, user_id: str) -> None:
+    # SQL increment avoids lost updates when logout and password changes race.
+    db.query(UserModel).filter(UserModel.id == user_id).update(
+        {UserModel.auth_version: UserModel.auth_version + 1}, synchronize_session=False,
+    )
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: Session = Depends(get_db),
@@ -88,11 +102,12 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User no longer exists",
         )
-    if not user.is_active:
+    if not user.is_active or user.scheduled_deletion_at is not None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account disabled",
         )
+    validate_token_version(payload, user)
     if request is not None:
         enforce_rate_limit(
             f"api:{user.id}", int(os.getenv("API_RATE_LIMIT", "1000")), 3600,

@@ -29,6 +29,7 @@ class UserModel(Base):
     face_embedding_hash = Column(String(64), nullable=True)
     face_enrolled = Column(Boolean, default=False)
     failed_login_attempts = Column(Integer, nullable=False, default=0)
+    auth_version = Column(Integer, nullable=False, default=0, server_default='0')
     
     # Timestamps
     created_at = Column(DateTime, nullable=False, server_default=func.now())

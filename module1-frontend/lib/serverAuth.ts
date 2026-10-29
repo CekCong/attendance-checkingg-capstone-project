@@ -61,6 +61,8 @@ export async function forwardAuth(
       );
     }
     body = { refresh_token: refreshToken };
+  } else if (action === "logout" && refreshToken) {
+    body = { refresh_token: refreshToken };
   }
 
   let response: NextResponse;

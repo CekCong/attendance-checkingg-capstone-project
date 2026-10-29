@@ -95,7 +95,6 @@ import os
 from contextlib import asynccontextmanager, suppress
 
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
 
 from .routers import (
     admin,
@@ -110,21 +109,11 @@ from .routers import (
     stats,
     users,
 )
-from .database import engine, Base, SessionLocal
-from . import models
-from .retention import cleanup_expired_checkins
+from .database import SessionLocal
+from .retention import cleanup_expired_checkins, cleanup_expired_users
+from .migrate import check_runtime_database
 
 logger = logging.getLogger(__name__)
-
-
-def _ensure_audit_action_values() -> None:
-    if engine.dialect.name != "postgresql":
-        return
-    with engine.begin() as connection:
-        for action in models.AUDIT_ACTION_VALUES:
-            connection.execute(text(
-                f"ALTER TYPE audit_action_enum ADD VALUE IF NOT EXISTS '{action}'"
-            ))
 
 
 async def _retention_cleanup_worker() -> None:
@@ -133,9 +122,10 @@ async def _retention_cleanup_worker() -> None:
         db = SessionLocal()
         try:
             cleanup_expired_checkins(db)
+            cleanup_expired_users(db)
         except Exception:
             db.rollback()
-            logger.exception("Check-in retention cleanup failed")
+            logger.exception("Personal-data retention cleanup failed")
         finally:
             db.close()
         await asyncio.sleep(interval)
@@ -143,8 +133,7 @@ async def _retention_cleanup_worker() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup: Initialize database schema ---
-    Base.metadata.create_all(bind=engine)
-    _ensure_audit_action_values()
+    check_runtime_database()
     cleanup_task = asyncio.create_task(_retention_cleanup_worker())
     try:
         yield

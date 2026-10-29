@@ -5,9 +5,12 @@ and authenticated requests. Next.js forwards authentication requests and keeps
 refresh tokens in an HttpOnly, SameSite=Lax cookie. Access tokens live in browser
 session storage and memory; page restoration consults the backend. Refresh runs
 before access-token expiry and when the window regains focus near expiry.
-Logout calls the backend to record the event, then clears browser authentication.
-Tokens are currently stateless: clearing cookies does not revoke a copied token
-before expiry. Session revocation is a remaining security-hardening item.
+Logout, password changes, account deactivation and deletion increment the user's
+database authentication version, invalidating all previously issued access and
+refresh tokens. Logout accepts the server-held refresh token even after access
+expiry. Password changes sign the browser out immediately. Tokens issued before
+Stage 4 require a new login. Refresh tokens remain reusable until expiry or account
+session revocation; this is account-wide revocation, not per-device refresh rotation.
 
 ## Addresses
 
@@ -33,6 +36,13 @@ against the Next server's peer IP, so users share that limit until a trusted ing
 client-IP arrangement is configured. Do not broadly trust forwarded headers.
 
 ## Docker
+
+Compose runs `db-migrate` with the schema-owner credentials before starting the
+backend. The backend uses `saiv_app`, which cannot change schema or mutate audit
+history. The API deliberately refuses to start with the old superuser connection.
+See [security/privacy deployment](SECURITY-PRIVACY.md) for native setup and migration
+instructions. Compose passwords are disposable local defaults; set separate,
+strong deployment credentials. `IPINFO_TOKEN` is now supplied through the environment.
 
 `docker compose up --build` uses the frontend `development` image target and live
 reload. This target does not require a production font download. For a production
@@ -85,3 +95,6 @@ PYTHONPATH=tests python -m pytest tests/regression/test_frontend_auth_proxy.py -
 ```
 
 It creates test users and audit events. Run against a disposable development stack.
+For this HTTPX test use Next development on HTTP, or a production server over HTTPS:
+HTTPX does not implement browsers' Secure-cookie exception for HTTP localhost.
+The Chromium account test also runs against the production build on localhost.

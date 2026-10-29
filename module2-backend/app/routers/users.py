@@ -1,6 +1,6 @@
 import uuid
 import html
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -10,7 +10,8 @@ import enum
 
 from ..database import get_db
 from ..models import EnrollmentModel, UserModel as User
-from ..security import get_current_user, require_roles
+from ..security import get_current_user, require_roles, revoke_user_sessions
+from ..retention import ACCOUNT_RETENTION_DAYS
 from ..course_access import staff_course_ids
 from ..services.face_client import FaceServiceError, enroll_face as enroll_face_with_service
 from ..audit import add_audit_log
@@ -122,6 +123,30 @@ def get_me(
     return user
 
 
+class DeleteMeBody(BaseModel):
+    current_password: str = Field(min_length=1)
+
+
+@router.delete("/me", status_code=202)
+def schedule_account_deletion(
+    body: DeleteMeBody, request: Request,
+    current_user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from .auth import verify_password
+    from ..rate_limit import enforce_rate_limit
+    user = db.query(User).filter(User.id == current_user["id"]).one()
+    enforce_rate_limit(f"delete-account:{user.id}", 10, 3600)
+    if not verify_password(body.current_password, user.hashed_password):
+        raise HTTPException(400, "Current password is incorrect")
+    user.scheduled_deletion_at = datetime.utcnow() + timedelta(days=ACCOUNT_RETENTION_DAYS)
+    user.is_active = False
+    revoke_user_sessions(db, user.id)
+    add_audit_log(db, request, "user_updated", user_id=user.id, resource_type="user",
+                  resource_id=user.id, details="Account deletion scheduled")
+    db.commit()
+    return {"scheduled_deletion_at": user.scheduled_deletion_at, "message": "Account disabled; personal data is scheduled for erasure after 30 days."}
+
+
 # PUT /users/me
 @router.put("/me", response_model=UserResponse)
 def update_me(
@@ -135,6 +160,9 @@ def update_me(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    if update_data.get("camera_consent") is False:
+        user.face_embedding_hash = None
+        user.face_enrolled = False
     if "full_name" in update_data and update_data["full_name"]:
         update_data["full_name"] = update_data["full_name"].strip()
 
@@ -277,6 +305,10 @@ def update_user_details(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    if update_data.get("is_active") and (user.scheduled_deletion_at is not None or user.hashed_password == "!deleted"):
+        raise HTTPException(409, "Accounts scheduled for deletion or erased cannot be activated.")
+    if update_data.get("is_active") is False:
+        revoke_user_sessions(db, user.id)
     for field, value in update_data.items():
         setattr(user, field, value)
 

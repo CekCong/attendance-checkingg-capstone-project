@@ -21,6 +21,8 @@ from ..security import (
     decode_token,
     get_current_user,
     user_response,
+    validate_token_version,
+    revoke_user_sessions,
 )
 
 # Environment Configuration & Database Setup
@@ -196,7 +198,7 @@ async def login(
             headers={"X-RateLimit-Remaining": "0"},
         )
 
-    if not existing.is_active:
+    if not existing.is_active or existing.scheduled_deletion_at is not None:
         add_audit_log(
             db,
             request,
@@ -256,7 +258,8 @@ async def login(
     db.commit()
     db.refresh(existing)
 
-    token_user = {"id": existing.id, "email": existing.email, "role": existing.role}
+    token_user = {"id": existing.id, "email": existing.email, "role": existing.role,
+                  "auth_version": existing.auth_version}
     access = create_access_token(token_user)
     refresh_token = create_refresh_token(token_user)
     _set_refresh_cookie(response, refresh_token)
@@ -298,14 +301,16 @@ async def refresh(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing refresh token",
         )
-    if not user.is_active:
+    if not user.is_active or user.scheduled_deletion_at is not None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account disabled",
         )
 
+    validate_token_version(payload, user)
     enforce_rate_limit(f"api:{user.id}", int(os.getenv("API_RATE_LIMIT", "1000")), 3600)
-    token_user = {"id": user.id, "email": user.email, "role": user.role}
+    token_user = {"id": user.id, "email": user.email, "role": user.role,
+                  "auth_version": user.auth_version}
     new_access = create_access_token(token_user)
     new_refresh = create_refresh_token(token_user)
     
@@ -324,16 +329,30 @@ async def refresh(
 async def logout(
     request: Request,
     response: Response,
-    _user=Depends(get_current_user),
+    body: Optional[RefreshBody] = None,
     db: Session = Depends(get_db),
 ):
+    refresh_token = (body.refresh_token if body else None) or request.cookies.get(REFRESH_COOKIE)
+    authorization = request.headers.get("authorization", "")
+    if refresh_token:
+        payload = decode_token(refresh_token, "refresh")
+    elif authorization.lower().startswith("bearer "):
+        payload = decode_token(authorization[7:], "access")
+    else:
+        raise HTTPException(401, "Not authenticated")
+    user = db.query(UserModel).filter(UserModel.id == payload.get("sub", "")).first()
+    if user is None:
+        raise HTTPException(401, "User no longer exists")
+    validate_token_version(payload, user)
+    enforce_rate_limit(f"api:{user.id}", int(os.getenv("API_RATE_LIMIT", "1000")), 3600)
+    revoke_user_sessions(db, user.id)
     add_audit_log(
         db,
         request,
         "logout",
-        user_id=str(_user.get("id")),
+        user_id=user.id,
         resource_type="user",
-        resource_id=str(_user.get("id")),
+        resource_id=user.id,
     )
     db.commit()
     response.delete_cookie(REFRESH_COOKIE, path="/")
@@ -371,6 +390,7 @@ def change_password(
         raise HTTPException(status_code=400, detail="Choose a different password")
     user.hashed_password = get_password_hash(body.new_password)
     user.failed_login_attempts = 0
+    revoke_user_sessions(db, user.id)
     add_audit_log(db, request, "user_updated", user_id=user.id,
                   resource_type="user", resource_id=user.id, details="updated_fields=password")
     db.commit()

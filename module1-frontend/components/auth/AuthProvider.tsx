@@ -33,6 +33,7 @@ type AuthContextValue = {
   accessToken: string | null;
   login: (email: string, password: string, role: UserRole) => Promise<void>;
   logout: () => Promise<void>;
+  deleteAccount: (password: string) => Promise<void>;
   updateProfile: (patch: ProfileUpdate) => Promise<void>;
   changePassword: (
     currentPassword: string,
@@ -193,9 +194,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           new_password: nextPassword,
         }),
       });
+      generation.current += 1;
+      clearSession();
+      // The backend already revoked every session; this also clears the cookie.
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
     },
-    [accessToken],
+    [accessToken, clearSession],
   );
+
+  const deleteAccount = useCallback(async (password: string) => {
+    if (!accessToken) throw new Error("Please sign in again.");
+    await studentRequest("/users/me", accessToken, {
+      method: "DELETE", body: JSON.stringify({ current_password: password }),
+    });
+    generation.current += 1;
+    clearSession();
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
+  }, [accessToken, clearSession]);
 
   const value = useMemo(
     () => ({
@@ -204,10 +219,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accessToken,
       login,
       logout,
+      deleteAccount,
       updateProfile,
       changePassword,
     }),
-    [ready, user, accessToken, login, logout, updateProfile, changePassword],
+    [ready, user, accessToken, login, logout, deleteAccount, updateProfile, changePassword],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

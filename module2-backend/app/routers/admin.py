@@ -9,7 +9,7 @@ import enum
 import os
 from dotenv import load_dotenv
 
-from app.security import get_current_user
+from app.security import get_current_user, revoke_user_sessions
 from app.database import get_db as shared_get_db
 from app.models import UserModel as User, SessionModel, EnrollmentModel
 from app.store import hash_password
@@ -147,6 +147,7 @@ def deactivate_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User '{user_id}' not found.")
 
     user.is_active = False
+    revoke_user_sessions(db, user.id)
     add_audit_log(
         db, request, "user_updated",
         user_id=str(admin_user.get("id")), resource_type="user", resource_id=user.id,
@@ -174,6 +175,8 @@ def activate_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User '{user_id}' not found.")
 
+    if user.scheduled_deletion_at is not None or user.hashed_password == "!deleted":
+        raise HTTPException(409, "Accounts scheduled for deletion or erased cannot be activated.")
     user.is_active = True
     add_audit_log(
         db, request, "user_updated",

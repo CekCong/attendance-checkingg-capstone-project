@@ -41,6 +41,23 @@ services:
   # Application Services (Students implement these)
   # ==========================================================================
 
+  db-migrate:
+    build:
+      context: ./module2-backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://saiv:saiv_password@postgres:5432/saiv
+      APP_DATABASE_ROLE: saiv_app
+      APP_DATABASE_PASSWORD: "${APP_DATABASE_PASSWORD:-saiv_app_dev_password}"
+    volumes:
+      - ./module2-backend/app:/app/app
+    command: ["python", "-m", "app.migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - saiv-network
+
   backend:
     build:
       context: ./module2-backend
@@ -49,7 +66,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://saiv:saiv_password@postgres:5432/saiv
+      DATABASE_URL: postgresql://saiv_app:${APP_DATABASE_PASSWORD:-saiv_app_dev_password}@postgres:5432/saiv
       REDIS_URL: redis://redis:6379
       REGISTRATION_RATE_LIMIT: "${REGISTRATION_RATE_LIMIT:-10}"
       LOGIN_RATE_LIMIT: "${LOGIN_RATE_LIMIT:-60}"
@@ -71,6 +88,8 @@ services:
         - action: rebuild
           path: ./module2-backend/Dockerfile
     depends_on:
+      db-migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -87,7 +106,7 @@ services:
       - "8001:8001"
     environment:
       REDIS_URL: redis://redis:6379
-      IPINFO_TOKEN: d6f7dc03defe84
+      IPINFO_TOKEN: "${IPINFO_TOKEN:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
