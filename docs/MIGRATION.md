@@ -98,7 +98,7 @@ workflow tests. Browser and monitoring evidence, dependency audit,
 reproduction commands and remaining release gates are documented in
 [release validation](RELEASE-VALIDATION.md).
 
-## 6. Dependency modernization and session QR — checkpoint
+## 6. Dependency modernization and session QR — completed
 
 Implemented: audited Python dependency locks, PyJWT migration, test/runtime dependency
 separation, lean backend Docker image, expiring instructor-issued QR codes and local
@@ -108,14 +108,16 @@ passed. Student/instructor production builds, TypeScript and the new ArcFace sta
 also passed compatibility checks. New application dependency audits report zero
 known vulnerabilities.
 
-**Still open:** MediaPipe Tasks model download is denied by the cloud proxy. The
-adapter and installer are prepared; the real Tasks pipeline and new face image are
-unverified. HTTP suites used the retained Stage 5 face service. Enable the saved
-`storage.googleapis.com` network addition, then complete model acceptance before
-replacing that process. See [Stage 6 evidence and resume commands](STAGE6-DEPENDENCIES-QR.md).
+The model-access blocker is resolved. Official MediaPipe assets now have pinned
+SHA-256 checks at installation and startup, and the face image includes EGL/GLES
+libraries. **Five real-model/integrity acceptance tests and 199 public/regression
+tests passed**, with zero failures or skips, against the new face Docker runtime
+and updated backend. The image passed dependency consistency and advisory checks,
+and both model runtimes loaded with networking disabled. The normal face service
+now uses the new image. See [Stage 6 evidence and commands](STAGE6-DEPENDENCIES-QR.md).
 
 Real-device biometric acceptance and production deployment/provisioning are still
-release gates. Stage 6 is a checkpoint, not production release approval.
+release gates. Completing this migration does not establish production release approval.
 
 ## 7. Production readiness — identity controls implemented
 
@@ -130,6 +132,6 @@ Validation: 198 full-suite tests and 27 focused identity tests passed (overlappi
 coverage), including concurrent PostgreSQL CLI bootstrap. Docker startup/configuration
 and registration/cookie behavior passed. See [production identity controls](PRODUCTION-IDENTITY.md).
 
-This work is independent of Stage 6's pending model access. MediaPipe acceptance,
-real-device biometric testing and production operations remain open; no production
+Stage 6's automated model/container acceptance is now complete.
+Real-device biometric testing and production operations remain open; no production
 release is claimed.

@@ -6,6 +6,7 @@ from threading import Lock
 
 import mediapipe as mp
 import numpy as np
+from app.model_assets import verify_model
 
 MODEL_ROOT = Path(os.getenv("MEDIAPIPE_MODEL_DIR", "/app/models/mediapipe"))
 _TASK_LOCK = Lock()
@@ -16,6 +17,8 @@ def get_tasks():
     paths = [MODEL_ROOT / "blaze_face_short_range.tflite", MODEL_ROOT / "face_landmarker.task"]
     if not all(path.is_file() for path in paths):
         raise RuntimeError("MediaPipe models are missing. Run python -m app.prepare_models before starting the service.")
+    for path in paths:
+        verify_model(path.name, path.read_bytes())
     base = mp.tasks.BaseOptions
     vision = mp.tasks.vision
     detector = vision.FaceDetector.create_from_options(vision.FaceDetectorOptions(

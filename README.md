@@ -57,14 +57,14 @@ Welcome to our capstone project! The goal is to build a secure, privacy-preservi
 
 ## Migration status
 
-Stages 1–5 are implemented on `hongyu`. Stage 6 adds updated dependency locks and
-session QR issuance/scanning; the MediaPipe migration awaits official model access
-and validation. See [migration progress](docs/MIGRATION.md) and
-[Stage 6 checkpoint](docs/STAGE6-DEPENDENCIES-QR.md). Real-device biometric acceptance
+Stages 1–6 are implemented on `hongyu`, including updated dependency locks,
+session QR issuance/scanning and the verified MediaPipe Tasks runtime/image.
+See [migration progress](docs/MIGRATION.md) and
+[Stage 6 validation](docs/STAGE6-DEPENDENCIES-QR.md). Real-device biometric acceptance
 remains open. Stage 7's student-only sign-up, initial-admin bootstrap and production
 authentication configuration checks are implemented; see
 [production identity controls](docs/PRODUCTION-IDENTITY.md). Production operations
-and Stage 6 model acceptance remain open.
+remain open.
 
 ## Getting Started
 

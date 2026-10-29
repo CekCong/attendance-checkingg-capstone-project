@@ -108,7 +108,7 @@ For this HTTPX test use Next development on HTTP, or a production server over HT
 HTTPX does not implement browsers' Secure-cookie exception for HTTP localhost.
 The Chromium account test also runs against the production build on localhost.
 
-## Stage 6 dependency checkpoint
+## Stage 6 dependency migration
 
 The backend now uses PyJWT with HS256 and mandatory subject/issued-at/expiry/type/
 authentication-version claims. Existing valid signed tokens remain compatible;
@@ -122,10 +122,12 @@ opaque manual code, versioned JSON payload and UTC expiry. They inherit the API'
 `Cache-Control: no-store`. A new code enables required-code verification and rotates
 any earlier one; it does not bypass enrollment, consent, device or liveness checks.
 
-The new MediaPipe runtime requires versioned official model downloads, which the
-current cloud proxy blocks. The environment draft adds `storage.googleapis.com`;
-model and Docker acceptance remain pending. See [Stage 6 status and commands](STAGE6-DEPENDENCIES-QR.md)
-before restarting the retained Stage 5 face process or building the new face image.
+The new MediaPipe Tasks runtime uses versioned official model downloads from
+`storage.googleapis.com`, now accessible. Both assets have pinned SHA-256 checks
+at installation and startup; the Docker image includes the required EGL/GLES libraries.
+Real model acceptance and Docker runtime validation passed. See
+[Stage 6 evidence and commands](STAGE6-DEPENDENCIES-QR.md). Use the new Python 3.11
+runtime/image when restarting the face service.
 
 ## Stage 7 registration and initial administrator
 

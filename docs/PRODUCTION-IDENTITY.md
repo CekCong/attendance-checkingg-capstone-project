@@ -1,7 +1,7 @@
 # Stage 7, part 1: production identity controls
 
-Implemented on 30 October 2026 (Singapore), independently of the still-blocked
-Stage 6 MediaPipe model download. This completes registration/bootstrap hardening;
+Implemented on 30 October 2026 (Singapore), while the Stage 6 MediaPipe download
+was blocked (it is now resolved). This completes registration/bootstrap hardening;
 it does not establish production deployment or real-device biometric acceptance.
 
 ## Registration and provisioning
@@ -101,10 +101,8 @@ identity tests use isolated SQLite and namespaced Redis database 2.
 
 ## Still outstanding
 
-Stage 6 remains blocked by HTTP 403 from the cloud proxy for
-`storage.googleapis.com`; the environment draft already contains the required
-addition. Apply it, validate the new MediaPipe pipeline/image, and replace the
-retained vulnerable Stage 5 face process only after acceptance passes.
+Stage 6's model-access blocker is resolved and the new MediaPipe pipeline/image
+has passed automated acceptance. See [updated Stage 6 evidence](STAGE6-DEPENDENCIES-QR.md).
 
 Stage 7 still needs real-phone biometric/attack testing, production HTTPS/secrets,
 trusted ingress/IP configuration, backup/restore exercises, audit retention and

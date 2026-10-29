@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -62,4 +63,55 @@ try:
     assert not analyze_face_mesh(empty)['face_mesh_complete']
 finally:
     close_tasks()
+''')
+
+
+@pytest.mark.parametrize('corrupt', [False, True])
+def test_tasks_reject_missing_or_corrupt_models_before_native_loading(corrupt):
+    face_python('''
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+from app.services import mediapipe_tasks as tasks
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    if CORRUPT:
+        for name in ['blaze_face_short_range.tflite', 'face_landmarker.task']:
+            (root / name).write_bytes(b'corrupt model')
+    with patch.object(tasks, 'MODEL_ROOT', root), patch.object(
+        tasks.mp.tasks.vision.FaceDetector, 'create_from_options'
+    ) as create:
+        try:
+            tasks.get_tasks()
+        except RuntimeError as error:
+            assert ('checksum mismatch' if CORRUPT else 'missing') in str(error)
+        else:
+            raise AssertionError('Invalid assets were accepted')
+        create.assert_not_called()
+'''.replace('CORRUPT', repr(corrupt)))
+
+
+def test_failed_download_preserves_existing_model_and_removes_temporary_file():
+    face_python('''
+import os
+from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+from app import prepare_models
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    target = root / 'blaze_face_short_range.tflite'
+    target.write_bytes(b'existing artifact')
+    with patch.dict(os.environ, MEDIAPIPE_MODEL_DIR=directory), patch.object(
+        prepare_models.urllib.request, 'urlopen', return_value=BytesIO(b'bad download')
+    ):
+        try:
+            prepare_models.main()
+        except RuntimeError as error:
+            assert 'checksum mismatch' in str(error)
+        else:
+            raise AssertionError('Invalid download was installed')
+    assert target.read_bytes() == b'existing artifact'
+    assert list(root.iterdir()) == [target]
 ''')
