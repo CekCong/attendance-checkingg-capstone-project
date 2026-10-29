@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import uuid
 from ..rate_limit import check_rate_limit as apply_rate_limit, enforce_rate_limit
 from ..audit import add_audit_log
+from ..runtime_security import privileged_registration_enabled
 from ..security import (
     create_access_token,
     create_refresh_token,
@@ -103,6 +104,12 @@ async def register(body: RegisterBody, request: Request, db: Session = Depends(g
             detail="Too many registration attempts. Please try again later.",
             headers={"X-RateLimit-Remaining": "0"},
         )
+
+    if body.role != "student" and not privileged_registration_enabled():
+        add_audit_log(db, request, "security_violation", success=False,
+                      details="privileged_registration_denied")
+        db.commit()
+        raise HTTPException(403, "Staff accounts must be created by an administrator")
 
     existing_user = db.query(UserModel).filter(UserModel.email == body.email.lower().strip()).first()
     if existing_user:

@@ -113,6 +113,8 @@ from .routers import (
 from .database import SessionLocal, engine
 from .rate_limit import get_redis_client
 from .admission import DatabaseAdmissionMiddleware
+from .runtime_security import validate_runtime_security
+from .security import SECRET_KEY
 from .retention import cleanup_expired_checkins, cleanup_expired_users
 from .migrate import check_runtime_database
 
@@ -135,7 +137,8 @@ async def _retention_cleanup_worker() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- Startup: Initialize database schema ---
+    # Validate runtime configuration and database permissions before serving requests.
+    validate_runtime_security(signing_key=SECRET_KEY)
     check_runtime_database()
     cleanup_task = asyncio.create_task(_retention_cleanup_worker())
     try:

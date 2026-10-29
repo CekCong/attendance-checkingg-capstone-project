@@ -84,6 +84,7 @@ HTTP fixture suites create many accounts from one IP. Start a separate backend
 for those suites with a separate `RATE_LIMIT_PREFIX` and explicit higher limits:
 
 ```bash
+SAIV_ENV=test ALLOW_PRIVILEGED_SELF_REGISTRATION=true \
 REGISTRATION_RATE_LIMIT=100000 LOGIN_RATE_LIMIT=100000 \
 API_RATE_LIMIT=100000 CHECKIN_RATE_LIMIT=100000 RATE_LIMIT_PREFIX=test-suite: \
 uvicorn app.main:app --port 8020 --no-proxy-headers
@@ -125,3 +126,16 @@ The new MediaPipe runtime requires versioned official model downloads, which the
 current cloud proxy blocks. The environment draft adds `storage.googleapis.com`;
 model and Docker acceptance remain pending. See [Stage 6 status and commands](STAGE6-DEPENDENCIES-QR.md)
 before restarting the retained Stage 5 face process or building the new face image.
+
+## Stage 7 registration and initial administrator
+
+Public sign-ups now create students only; selecting a staff/admin role returns 403.
+Provision the first administrator with `python -m app.bootstrap_admin` through
+trusted server access, then use the authenticated admin API to create staff.
+`SAIV_ENV=production` enforces a non-development signing key of at least 32 bytes,
+secure cookies and disabled privileged registration at startup.
+
+The supplied teaching fixtures require both `SAIV_ENV=test` and
+`ALLOW_PRIVILEGED_SELF_REGISTRATION=true` on their isolated backend. Standard
+Compose explicitly disables this override. See [production identity controls](PRODUCTION-IDENTITY.md)
+for operator commands, tests, compatibility details and remaining deployment gates.

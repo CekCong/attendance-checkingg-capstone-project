@@ -10,13 +10,16 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from jwt import InvalidTokenError
+from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 
 from .database import get_db
 from .models import UserModel
 from .rate_limit import enforce_rate_limit
+from .runtime_security import DEVELOPMENT_SECRET
 
-SECRET_KEY = os.getenv("SECRET_KEY", "saiv-dev-secret-change-me")
+load_dotenv()
+SECRET_KEY = os.getenv("SECRET_KEY", DEVELOPMENT_SECRET)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL = timedelta(hours=1)
 REFRESH_TOKEN_TTL = timedelta(days=7)

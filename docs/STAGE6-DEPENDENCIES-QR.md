@@ -107,9 +107,9 @@ From the repository root with the same model environment:
 The standalone ArcFace acceptance test passed. The Tasks test and new face Docker
 image remain unrun because their required model files are unavailable. Real target
 phone liveness, attack/accuracy evaluation and production deployment remain release
-gates. Public registration's selectable roles follow the supplied teaching API;
-production provisioning must prevent untrusted staff/admin self-registration before
-external exposure. Production secrets, HTTPS, trusted proxy/IP handling and audit/
+gates. Stage 7 now restricts public registration and provides operator-only administrator
+bootstrap; see [production identity controls](PRODUCTION-IDENTITY.md). Review existing
+privileged accounts before external exposure. Production secrets, HTTPS, trusted proxy/IP handling and audit/
 backup retention still require deployment acceptance.
 
 ## Dependency reproduction

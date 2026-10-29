@@ -116,3 +116,20 @@ replacing that process. See [Stage 6 evidence and resume commands](STAGE6-DEPEND
 
 Real-device biometric acceptance and production deployment/provisioning are still
 release gates. Stage 6 is a checkpoint, not production release approval.
+
+## 7. Production readiness — identity controls implemented
+
+Public registration now creates students only by default. A trusted operator can
+bootstrap the first administrator atomically, with protected password input and
+an audit event; existing admins provision staff through the protected API.
+Production startup validates the actual signing key, secure cookies and disabled
+privileged registration. Teaching fixture compatibility requires an explicitly
+isolated test mode.
+
+Validation: 198 full-suite tests and 27 focused identity tests passed (overlapping
+coverage), including concurrent PostgreSQL CLI bootstrap. Docker startup/configuration
+and registration/cookie behavior passed. See [production identity controls](PRODUCTION-IDENTITY.md).
+
+This work is independent of Stage 6's pending model access. MediaPipe acceptance,
+real-device biometric testing and production operations remain open; no production
+release is claimed.

@@ -61,7 +61,10 @@ Stages 1–5 are implemented on `hongyu`. Stage 6 adds updated dependency locks 
 session QR issuance/scanning; the MediaPipe migration awaits official model access
 and validation. See [migration progress](docs/MIGRATION.md) and
 [Stage 6 checkpoint](docs/STAGE6-DEPENDENCIES-QR.md). Real-device biometric acceptance
-and production deployment/provisioning remain open.
+remains open. Stage 7's student-only sign-up, initial-admin bootstrap and production
+authentication configuration checks are implemented; see
+[production identity controls](docs/PRODUCTION-IDENTITY.md). Production operations
+and Stage 6 model acceptance remain open.
 
 ## Getting Started
 
