@@ -6,6 +6,7 @@ node_modules/
 # testing
 coverage/
 .venv/
+.venv311/
 __pycache__/
 *.pyc
 .pytest_cache/

@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { StudentDashboard } from "@/components/dashboards/StudentDashboard";
-import { submitCheckIn } from "@/lib/mockApi";
+import { submitAttendance, type AttendanceLesson } from "@/lib/studentAttendance";
+import { GeolocationStep } from "./GeolocationStep";
 import { appendLessonHistory } from "@/lib/attendanceHistory";
 import type { ConsentState } from "@/lib/types";
 import {
@@ -17,7 +18,8 @@ import { ResultStep, SubmittingStep } from "./ResultStep";
 import { StepIndicator } from "./StepIndicator";
 
 export function CheckInWorkflow() {
-  const { user } = useAuth();
+  const { user, accessToken } = useAuth();
+  const [lesson, setLesson] = useState<AttendanceLesson | null>(null);
   const [state, dispatch] = useReducer(workflowReducer, initialWorkflowState);
   const submittingRef = useRef(false);
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -29,6 +31,9 @@ export function CheckInWorkflow() {
   const handleLivenessComplete = useCallback((frameBase64: string) => {
     dispatch({ type: "LIVENESS_COMPLETE", payload: { frameBase64 } });
   }, []);
+
+  const handleLocation = useCallback((coordinates: import("@/lib/types").GeoCoordinates) => dispatch({ type: "GEOLOCATION_COMPLETE", payload: coordinates }), []);
+  const handleLocationError = useCallback((message: string) => dispatch({ type: "GEOLOCATION_FAILED", payload: message }), []);
 
   const handleLivenessError = useCallback((message: string) => {
     dispatch({ type: "SUBMIT_ERROR", payload: message });
@@ -45,7 +50,7 @@ export function CheckInWorkflow() {
 
     const { frameBase64, coordinates, consentedAt, classCode, classTitle } = state;
 
-    if (!frameBase64 || !consentedAt || !classCode) {
+    if (!frameBase64 || !consentedAt || !classCode || !coordinates || !lesson || !accessToken) {
       dispatch({
         type: "SUBMIT_ERROR",
         payload: "Missing check-in data. Please restart from the dashboard.",
@@ -57,22 +62,18 @@ export function CheckInWorkflow() {
 
     void (async () => {
       try {
-        const result = await submitCheckIn({
-          frameBase64,
-          coordinates,
-          consentedAt,
-          classCode,
-        });
+        const result = await submitAttendance(lesson, accessToken, frameBase64, coordinates);
 
         if (cancelled) return;
 
         if (result.ok) {
           if (user) {
             appendLessonHistory(user.email, {
-              id: result.verificationId ?? `CHK-${Date.now()}`,
+              id: result.verificationId!,
               classCode: result.classCode ?? classCode,
               classTitle: result.classTitle ?? classTitle ?? classCode,
               verifiedAt: new Date().toISOString(),
+              status: result.status,
             });
             setHistoryVersion((n) => n + 1);
           }
@@ -80,11 +81,11 @@ export function CheckInWorkflow() {
         } else {
           dispatch({ type: "SUBMIT_ERROR", payload: result.message });
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           dispatch({
             type: "SUBMIT_ERROR",
-            payload: "Network error while submitting check-in. Please retry.",
+            payload: error instanceof Error ? error.message : "Network error while submitting check-in. Please retry.",
           });
         }
       }
@@ -104,9 +105,10 @@ export function CheckInWorkflow() {
         <StudentDashboard
           email={user.email}
           historyVersion={historyVersion}
-          onStartCheckIn={(classCode, classTitle) =>
-            dispatch({ type: "START", payload: { classCode, classTitle } })
-          }
+          onStartCheckIn={(selected) => {
+            setLesson(selected);
+            dispatch({ type: "START", payload: { classCode: selected.class_code, classTitle: selected.title } });
+          }}
         />
       )}
 
@@ -129,6 +131,10 @@ export function CheckInWorkflow() {
           onError={handleLivenessError}
         />
       )}
+
+      {state.step === "GEOLOCATION" && <GeolocationStep
+        onComplete={handleLocation}
+        onError={handleLocationError} />}
 
       {state.step === "SUBMITTING" && (
         <SubmittingStep

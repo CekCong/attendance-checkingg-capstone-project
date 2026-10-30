@@ -52,6 +52,7 @@ services:
       DATABASE_URL: postgresql://saiv:saiv_password@postgres:5432/saiv
       REDIS_URL: redis://redis:6379
       REGISTRATION_RATE_LIMIT: "100000"
+      ATTENDANCE_DEMO_MODE: "${ATTENDANCE_DEMO_MODE:-true}"
       SECRET_KEY: your-secret-key-change-in-production
       FACE_SERVICE_URL: http://face-recognition:8001
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -119,6 +120,7 @@ services:
     environment:
       NEXT_PUBLIC_APP_SURFACE: student
       PORT: "3000"
+      BACKEND_URL: http://backend:8000
       NEXT_PUBLIC_API_URL: http://localhost:8000
       NEXT_PUBLIC_FACE_SERVICE_URL: http://localhost:8001
       WATCHPACK_POLLING: "true"
@@ -158,6 +160,7 @@ services:
     environment:
       NEXT_PUBLIC_APP_SURFACE: instructor
       PORT: "8501"
+      BACKEND_URL: http://backend:8000
       NEXT_PUBLIC_API_URL: http://localhost:8000
       WATCHPACK_POLLING: "true"
     volumes:

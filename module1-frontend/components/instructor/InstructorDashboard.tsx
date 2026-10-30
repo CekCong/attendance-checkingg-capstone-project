@@ -10,19 +10,22 @@ import {
 import type {
   AttendanceRecord,
   InstructorDashboardData,
-  InstructorSession,
 } from "@/lib/instructorTypes";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { AttendancePanel } from "@/components/instructor/AttendancePanel";
+import { CourseManager } from "@/components/instructor/CourseManager";
+import { SessionCalendar } from "@/components/instructor/SessionCalendar";
+import type { Deletion } from "@/components/instructor/DeleteCourseControl";
+import { addDays, localInstant, singaporeDate } from "@/lib/calendar";
 import {
   fetchFlaggedCheckins,
   reviewFlaggedCheckin,
   fetchSessions,
-  createBackendSession,
   fetchCourses,
   fetchCheckins,
-  updateBackendSessionStatus,
   fetchAuditLogs,
   type BackendCourse,
+  type BackendSession,
 } from "@/lib/instructorApi";
 
 const POLL_MS = 30_000;
@@ -55,44 +58,44 @@ export function InstructorDashboard() {
   const [showRecords, setShowRecords] = useState(false);
   const [selectedSession, setSelectedSession] = useState("all");
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
-  const [newTitle, setNewTitle] = useState("");
-  const [created, setCreated] = useState<string | null>(null);
   const [auditSearch, setAuditSearch] = useState("");
   const [auditAction, setAuditAction] = useState("all");
   const [auditResult, setAuditResult] = useState("all");
   const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [calendarLesson, setCalendarLesson] = useState<BackendSession | null>(null);
+  const [calendarRevision, setCalendarRevision] = useState(0);
   const [courses, setCourses] = useState<BackendCourse[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
-  const [sessionStart, setSessionStart] = useState("");
-  const [sessionEnd, setSessionEnd] = useState("");
-  const [creatingSession, setCreatingSession] = useState(false);
-  const [updatingSessionId, setUpdatingSessionId] = useState<string | null>(null);
+
+  function handleDeleted({ courseId, lessonId }: Deletion) {
+    if (!lessonId) {
+      setCourses((current) => current.filter((course) => course.id !== courseId));
+      setSelectedCourseId((current) => current === courseId ? "" : current);
+    }
+    setCalendarLesson((current) => current && (lessonId ? current.id === lessonId : current.course_id === courseId) ? null : current);
+    setSelectedSession("all");
+    setCalendarRevision((value) => value + 1);
+    void load();
+  }
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch(
-        "/api/instructor/dashboard",
-        { cache: "no-store" },
-      );
-
-      if (!response.ok) {
-        throw new Error("Could not load dashboard");
-      }
-
-      const dashboard =
-        (await response.json()) as InstructorDashboardData;
+      const dashboard: InstructorDashboardData = {
+        generatedAt: new Date().toISOString(), todaySessions: [], flagged: [], records: [], auditLogs: [],
+        kpis: { todayCheckins: 0, flaggedPending: 0, approvalRate: 0, liveSessions: 0 },
+      };
 
       if (accessToken) {
         const [backendFlagged, backendSessions, backendCourses, backendCheckins, backendAuditLogs,] =
           await Promise.all([
             fetchFlaggedCheckins(accessToken),
-            fetchSessions(accessToken),
+            fetchSessions(accessToken, { start: localInstant(singaporeDate()), end: localInstant(addDays(singaporeDate(), 1)) }),
             fetchCourses(accessToken),
             fetchCheckins(accessToken),
             fetchAuditLogs(accessToken),
           ]);
 
-          setCourses(backendCourses)
+          setCourses(backendCourses);
 
         dashboard.flagged = backendFlagged.map((item) => ({
           id: item.id,
@@ -311,108 +314,17 @@ export function InstructorDashboard() {
     }   
   };
 
-  async function createSession() {
-    if (!accessToken) {
-      setError("You must be logged in to create a session.");
-      return;
-    }
-
-    const title = newTitle.trim();
-
-    if (
-      !selectedCourseId ||
-      !title ||
-      !sessionStart ||
-      !sessionEnd
-    ) {
-      setError("Please select a course and enter a title, start time, and end time.");
-      return;
-    }
-
-    const start = new Date(sessionStart);
-    const end = new Date(sessionEnd);
-
-    if (start <= new Date()) {
-      setError("Session start time must be in the future.");
-      return;
-    }
-
-    if (end <= start) {
-      setError("Session end time must be after the start time.");
-      return;
-    }
-
-    try {
-      setCreatingSession(true);
-      setError(null);
-
-      await createBackendSession(accessToken, {
-        course_id: selectedCourseId,
-        name: title,
-        scheduled_start: start.toISOString(),
-        scheduled_end: end.toISOString(),
-    });
-
-    setCreated(title);
-
-    setNewTitle("");
-    setSelectedCourseId("");
-    setSessionStart("");
-    setSessionEnd("");
-
-    await load();
-  } catch (err) {
-    setError(
-      err instanceof Error
-        ? err.message
-        : "Could not create session",
-    );
-  } finally {
-    setCreatingSession(false);
-  }
-}
-
-  async function changeSessionStatus(
-    sessionId: string,
-    status: "active" | "closed",
-  ) {
-    if (!accessToken) {
-      setError("You must be logged in to update sessions.");
-      return;
-    }
-
-    try {
-      setUpdatingSessionId(sessionId);
-      setError(null);
-
-      await updateBackendSessionStatus(
-        accessToken,
-        sessionId,
-        status,
-      );
-
-      await load();
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not update session",
-      );
-    } finally {
-      setUpdatingSessionId(null);
-    }
-  }
 
   return (
-    <div className="w-full max-w-6xl space-y-4 px-4 py-6 animate-fade-up sm:px-6 sm:py-8">
+    <div className="w-full max-w-[1600px] space-y-4 px-4 py-6 animate-fade-up sm:px-6 sm:py-8">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-sm uppercase tracking-[0.2em] text-white/70">Instructor</p>
           <h1 className="mt-1 font-display text-3xl font-semibold text-white">
-            Today&apos;s operations
+            Your teaching week
           </h1>
           <p className="mt-1 text-sm text-white/75">
-            Live sessions and flagged check-ins first. Exports stay collapsed until you need them.
+            Plan your lessons, manage attendance, and keep your week in view.
           </p>
         </div>
         <div className="text-right text-xs text-white/60">
@@ -431,90 +343,31 @@ export function InstructorDashboard() {
         <p className="rounded-xl bg-rose-500/20 px-3 py-2 text-sm text-rose-100">{error}</p>
       )}
 
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(320px,1fr)]">
+      <div className="min-w-0 space-y-4 lg:sticky lg:top-4">
+      <details className="rounded-2xl border border-white/20 bg-white/10">
+      <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-white">Courses & semesters</summary>
+      <CourseManager
+        accessToken={accessToken}
+        courses={courses}
+        selectedCourseId={selectedCourseId}
+        onDeleted={handleDeleted}
+        onSelect={setSelectedCourseId}
+        onCreated={(course) => {
+          setCourses((current) => [course, ...current.filter((item) => item.id !== course.id)]);
+          setSelectedCourseId(course.id);
+        }}
+      />
+
+      </details>
+      <SessionCalendar accessToken={accessToken} courses={courses} courseId={selectedCourseId}
+        onCourseChange={setSelectedCourseId} onChanged={load} onSelectLesson={setCalendarLesson} refreshKey={calendarRevision} />
+      </div>
+      <aside className="min-w-0 space-y-4" aria-label="Attendance tools and summaries">
+        <AttendancePanel lesson={calendarLesson} accessToken={accessToken} onDeleted={handleDeleted} onChanged={(lesson) => { setCalendarLesson(lesson); setCalendarRevision((value) => value + 1); void load(); }} />
+
       <div className="grid gap-4 lg:grid-cols-12">
-        <section className="lg:col-span-7">
-          <GlassCard className="h-full p-5 sm:p-6">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="font-display text-xl font-semibold text-white">Today&apos;s sessions</h2>
-              <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white">
-                {data?.kpis.liveSessions ?? 0} live
-              </span>
-            </div>
-            <ul className="mt-4 space-y-3">
-            {(data?.todaySessions ?? []).map((session) => (
-              <SessionRow
-                key={session.id}
-                session={session}
-                updating={updatingSessionId === session.id}
-                onStatusChange={(status) =>
-                  void changeSessionStatus(session.id, status)
-                }
-              />
-            ))}
-            </ul>
-            <form
-              className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void createSession();
-              }}
-            >
-              <select
-                value={selectedCourseId}
-                onChange={(e) =>
-                  setSelectedCourseId(e.target.value)
-                }
-                className="rounded-2xl border border-white/25 bg-sky-950/80 px-4 py-3 text-white outline-none"
-              >
-                <option value="">Select course</option>
-
-                {courses.map((course) => (
-                  <option key={course.id} value={course.id}>
-                    {course.code} — {course.name}
-                  </option>
-                ))}  
-              </select>
-
-              <input
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                placeholder="Session title"
-                className="rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none placeholder:text-white/40"
-              />
-
-              <label className="text-sm text-white/70">
-                Start time
-                <input
-                  type="datetime-local"
-                  value={sessionStart}
-                  onChange={(e) =>
-                    setSessionStart(e.target.value)
-                  }
-                  className="mt-1 w-full rounded-2xl border border-white/25 bg-sky-950/80 px-4 py-3 text-white outline-none"
-                />
-              </label>
-
-              <label className="text-sm text-white/70">
-                End time
-                <input
-                  type="datetime-local"
-                  value={sessionEnd}
-                  onChange={(e) =>
-                    setSessionEnd(e.target.value)
-                  }
-                  className="mt-1 w-full rounded-2xl border border-white/25 bg-sky-950/80 px-4 py-3 text-white outline-none"
-                />
-              </label> 
-
-              <button type="submit" disabled={creatingSession} className="rounded-2xl bg-white/90 px-5 py-3 font-semibold text-sky-950">
-                Create
-              </button>
-            </form>
-            {created && <p className="mt-2 text-sm text-emerald-200">Created: {created}</p>}
-          </GlassCard>
-        </section>
-
-        <section className="lg:col-span-5">
+        <section className="lg:col-span-12">
           <GlassCard className="h-full p-5 sm:p-6">
             <div className="flex items-center justify-between gap-3">
               <h2 className="font-display text-xl font-semibold text-white">Flagged check-ins</h2>
@@ -561,7 +414,7 @@ export function InstructorDashboard() {
         </section>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
         <Kpi label="Today's check-ins" value={String(data?.kpis.todayCheckins ?? "—")} />
         <Kpi label="Flagged pending" value={String(data?.kpis.flaggedPending ?? "—")} />
         <Kpi label="Approval rate" value={data ? `${Math.round(data.kpis.approvalRate * 100)}%` : "—"} />
@@ -924,69 +777,12 @@ export function InstructorDashboard() {
 
         </GlassCard>
       </details>
+      </aside>
+      </div>
     </div>
   );
 }
 
-function SessionRow({
-  session,
-  updating,
-  onStatusChange,
-}: {
-  session: InstructorSession;
-  updating: boolean;
-  onStatusChange: (status: "active" | "closed") => void;
-}) {
-  return (
-    <li className="flex items-center justify-between gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3">
-      <div>
-        <p className="font-medium text-white">
-          {session.title}
-        </p>
-
-        <p className="text-xs text-white/65">
-          {session.courseCode} · {session.checkins}/
-          {session.enrolled} checked in
-          {session.flagged
-            ? ` · ${session.flagged} flagged`
-            : ""}
-        </p>
-      </div>
-
-      <div className="flex items-center gap-2">
-        {session.status === "scheduled" && (
-          <button
-            type="button"
-            disabled={updating}
-            onClick={() => onStatusChange("active")}
-            className="rounded-lg bg-emerald-300 px-3 py-1 text-xs font-semibold text-emerald-950 disabled:opacity-50"
-          >
-            {updating ? "Updating..." : "Activate"}
-          </button>
-        )}
-
-        {session.status === "live" && (
-          <button
-            type="button"
-            disabled={updating}
-            onClick={() => onStatusChange("closed")}
-            className="rounded-lg bg-rose-300 px-3 py-1 text-xs font-semibold text-rose-950 disabled:opacity-50"
-          >
-            {updating ? "Updating..." : "Close"}
-          </button>
-        )}
-
-        <span
-          className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase ${statusClass(
-            session.status,
-          )}`}
-        >
-          {session.status}
-        </span>
-      </div>
-    </li>
-  );
-}
 
 function AttendanceBar({
   label,

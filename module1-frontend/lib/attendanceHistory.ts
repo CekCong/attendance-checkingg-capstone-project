@@ -2,20 +2,7 @@ import type { LessonHistoryItem } from "./types";
 
 const STORAGE_PREFIX = "saiv_lesson_history:";
 
-const SEED: LessonHistoryItem[] = [
-  {
-    id: "CHK-SEED1",
-    classCode: "CS101-L3",
-    classTitle: "CS101 Lecture 3",
-    verifiedAt: "2026-08-13T09:04:00.000Z",
-  },
-  {
-    id: "CHK-SEED2",
-    classCode: "CS204-LAB",
-    classTitle: "CS204 Lab",
-    verifiedAt: "2026-08-15T14:22:00.000Z",
-  },
-];
+const SEED: LessonHistoryItem[] = [];
 
 function keyFor(email: string) {
   return `${STORAGE_PREFIX}${email.toLowerCase()}`;

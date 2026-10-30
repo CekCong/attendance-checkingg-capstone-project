@@ -1,3 +1,5 @@
+import { addDays, localInstant, singaporeDate } from "@/lib/calendar";
+
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -26,6 +28,17 @@ function authHeaders(accessToken: string) {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
   };
+}
+
+export async function deleteCourseOrLesson(accessToken: string, scope: "course" | "lesson", id: string) {
+  const resource = scope === "course" ? "courses" : "sessions";
+  const response = await fetch(`${API_BASE}/api/v1/${resource}/${encodeURIComponent(id)}?permanent=true`, {
+    method: "DELETE", headers: authHeaders(accessToken),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(typeof error?.detail === "string" ? error.detail : "Unable to delete. Please try again.");
+  }
 }
 
 export async function fetchFlaggedCheckins(accessToken: string,): 
@@ -82,6 +95,7 @@ export async function reviewFlaggedCheckin(
 
 export type BackendSession = {
   id: string;
+  series_id?: string | null;
   course_id: string;
   course_code: string;
   course_name: string;
@@ -98,27 +112,53 @@ export type BackendSession = {
   checked_in_count: number;
 };
 
-export async function fetchSessions(accessToken: string,):
-Promise<BackendSession[]> {
-  const response = await fetch(
-    `${API_BASE}/api/v1/sessions/?limit=100`,
-    {
-      headers: authHeaders(accessToken),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-
-    throw new Error(
-      error?.detail ?? "Unable to load sessions",
-    );
+export async function fetchSessions(
+  accessToken: string,
+  range?: { start: string; end: string },
+): Promise<BackendSession[]> {
+  const result: BackendSession[] = [];
+  let offset = 0;
+  while (true) {
+    const params = new URLSearchParams({ limit: "100", offset: String(offset) });
+    if (range) { params.set("overlap_start", range.start); params.set("end_date", range.end); }
+    const response = await fetch(`${API_BASE}/api/v1/sessions/?${params}`, {
+      headers: authHeaders(accessToken), cache: "no-store",
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Unable to load lessons");
+    const items = data.items ?? [];
+    result.push(...items);
+    offset += items.length;
+    if (!items.length || offset >= data.total) return result;
   }
+}
 
-  const data = await response.json();
-
-  return data.items ?? [];
+export type LessonPayload = {
+  course_id: string;
+  name: string;
+  session_type: "lecture" | "tutorial" | "lab" | "exam";
+  venue_name?: string;
+};
+export type RecurringLessonPayload = LessonPayload & {
+  request_id: string;
+  start_date: string;
+  end_date: string;
+  weekday: number;
+  start_time: string;
+  end_time: string;
+  timezone: "Asia/Singapore";
+};
+export async function createRecurringLessons(accessToken: string, payload: RecurringLessonPayload): Promise<{ count: number; series_id: string }> {
+  const response = await fetch(`${API_BASE}/api/v1/sessions/recurring`, {
+    method: "POST", headers: authHeaders(accessToken), body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof data.detail === "string" ? data.detail : Array.isArray(data.detail)
+      ? data.detail.map((item: { msg: string }) => item.msg).join(". ") : "Unable to schedule lessons.";
+    throw new Error(detail);
+  }
+  return data;
 }
 
 export type BackendCourse = {
@@ -127,6 +167,25 @@ export type BackendCourse = {
   name: string;
   semester: string;
 };
+
+export async function createBackendCourse(
+  accessToken: string,
+  payload: { code: string; name: string; semester: string },
+): Promise<BackendCourse> {
+  const response = await fetch(`${API_BASE}/api/v1/courses/`, {
+    method: "POST",
+    headers: authHeaders(accessToken),
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof data.detail === "string"
+      ? data.detail
+      : "Unable to create course. Check the course details and try again.";
+    throw new Error(detail);
+  }
+  return data;
+}
 
 export async function fetchCourses(accessToken: string):
 Promise<BackendCourse[]> {
@@ -154,6 +213,8 @@ export async function createBackendSession(
     name: string;
     scheduled_start: string;
     scheduled_end: string;
+    session_type?: LessonPayload["session_type"];
+    venue_name?: string;
   },
 ) {
   const response = await fetch(
@@ -163,14 +224,16 @@ export async function createBackendSession(
       headers: authHeaders(accessToken),
       body: JSON.stringify({
         ...payload,
-        session_type: "lecture",
+        session_type: payload.session_type ?? "lecture",
       }),
     },
   );
 
   if (!response.ok) {
     const error = await response.json().catch(() => null);
-    throw new Error(error?.detail ?? "Unable to create session");
+    const detail = typeof error?.detail === "string" ? error.detail : Array.isArray(error?.detail)
+      ? error.detail.map((item: { msg: string }) => item.msg).join(". ") : "Unable to create lesson.";
+    throw new Error(detail);
   }
 
   return response.json();
@@ -197,16 +260,14 @@ export type BackendCheckin = {
 
 export async function fetchCheckins(accessToken: string,): 
   Promise<BackendCheckin[]> {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
+  const today = singaporeDate();
+  const start = localInstant(today);
+  const end = new Date(new Date(localInstant(addDays(today, 1))).getTime() - 1).toISOString();
 
   const params = new URLSearchParams({
     limit: "100",
-    start_date: start.toISOString(),
-    end_date: end.toISOString(),
+    start_date: start,
+    end_date: end,
   });
 
   const response = await fetch(

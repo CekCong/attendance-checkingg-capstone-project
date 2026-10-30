@@ -28,6 +28,7 @@ export type CheckInPayload = {
 
 export type CheckInResult = {
   ok: boolean;
+  status?: string;
   verificationId?: string;
   message: string;
   classCode?: string;
@@ -35,6 +36,7 @@ export type CheckInResult = {
 };
 
 export type LessonHistoryItem = {
+  status?: string;
   id: string;
   classCode: string;
   classTitle: string;

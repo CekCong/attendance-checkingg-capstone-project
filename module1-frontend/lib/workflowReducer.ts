@@ -32,7 +32,7 @@ export function workflowReducer(
       };
 
     case "CONFIRM_CONSENT":
-      if (!state.consent.camera) {
+      if (!state.consent.camera || !state.consent.geolocation) {
         return state;
       }
       return {
@@ -42,10 +42,10 @@ export function workflowReducer(
       };
 
     case "LIVENESS_COMPLETE":
-      // Location verification is stubbed — skip GPS and submit.
+      // Read location only after camera capture and explicit consent.
       return {
         ...state,
-        step: "SUBMITTING",
+        step: "GEOLOCATION",
         frameBase64: action.payload.frameBase64,
         coordinates: null,
         errorMessage: null,

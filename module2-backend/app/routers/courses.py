@@ -1,16 +1,17 @@
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, ForeignKey, create_engine, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 import os
 from dotenv import load_dotenv
-from ..models import CourseModel as Course, UserModel as User, SessionModel
+from ..models import CourseModel as Course, UserModel as User, SessionModel, CourseInstructorModel
 from ..course_access import require_course_staff_access, staff_course_ids
 
 from app.security import get_current_user, get_optional_current_user, require_roles
+from app.audit import add_audit_log
 
 # 1: Database Setup ---
 load_dotenv()
@@ -34,10 +35,10 @@ def get_db():
 
 #2. Pydantic Schemas ---
 class CourseCreate(BaseModel):
-    code: str
-    name: str
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=255)
     description: Optional[str] = None
-    semester: str
+    semester: str = Field(min_length=1, max_length=20)
     instructor_id: Optional[str] = None
     venue_name: Optional[str] = None
     venue_latitude: Optional[float] = None
@@ -46,6 +47,11 @@ class CourseCreate(BaseModel):
     require_face_recognition: Optional[bool] = False
     require_device_binding: Optional[bool] = True
     risk_threshold: Optional[float] = 0.5
+
+    @field_validator("code", "name", "semester", mode="before")
+    @classmethod
+    def trim_required_fields(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 class CourseListItemResponse(BaseModel):
     id: str
@@ -113,6 +119,20 @@ class CourseUpdate(BaseModel):
 router = APIRouter(prefix="/courses", tags=["courses"])
 
 
+def course_instructor(db: Session, course_id: str):
+    instructor = (
+        db.query(User).join(CourseInstructorModel, CourseInstructorModel.instructor_id == User.id)
+        .filter(CourseInstructorModel.course_id == course_id).first()
+    )
+    if not instructor:
+        # Existing courses may have assignments only through their sessions.
+        instructor = (
+            db.query(User).join(SessionModel, SessionModel.instructor_id == User.id)
+            .filter(SessionModel.course_id == course_id).first()
+        )
+    return (instructor.id, instructor.full_name) if instructor else (None, "Unknown")
+
+
 # GET /courses/ - List courses with optional filters and wrapped pagination response
 @router.get("/", response_model=CoursePaginatedResponse, status_code=status.HTTP_200_OK)
 def list_courses(
@@ -143,28 +163,16 @@ def list_courses(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Filtering by instructor_id is restricted to administrators."
             )
-        # Filter courses that have at least one session assigned to this instructor
-        query = (
-            query.join(SessionModel, Course.id == SessionModel.course_id)
-            .filter(SessionModel.instructor_id == str(instructor_id))
-            .distinct()
-        )
+        query = query.filter(Course.id.in_(staff_course_ids(
+            db, {"id": str(instructor_id), "role": "instructor"},
+        )))
 
     total = query.count()
     courses = query.order_by(Course.created_at.desc()).offset(offset).limit(limit).all()
 
     items = []
     for course in courses:
-        # Fetch an instructor associated with this course via SessionModel
-        session_instructor = (
-            db.query(SessionModel, User)
-            .join(User, SessionModel.instructor_id == User.id)
-            .filter(SessionModel.course_id == course.id, SessionModel.instructor_id.isnot(None))
-            .first()
-        )
-        
-        inst_id = session_instructor[0].instructor_id if session_instructor else None
-        inst_name = session_instructor[1].full_name if session_instructor else "Unknown"
+        inst_id, inst_name = course_instructor(db, course.id)
 
         items.append(
             CourseListItemResponse(
@@ -193,15 +201,15 @@ def list_courses(
     }
 
 
-# POST /courses/ - Create a new course (Admin only)
+# POST /courses/ - Create a new course (Admin or Instructor)
 @router.post("/", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)
 def create_course(
     payload: CourseCreate,
-    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+    current_user: Dict[str, Any] = Depends(require_roles("admin", "instructor")),
     db: Session = Depends(get_db)
 ):
     """
-    Create a new course. **Requires auth (admin only).**
+    Create a course. Instructors can only assign new courses to themselves.
     """
     existing = db.query(Course).filter(Course.code == payload.code).first()
     if existing:
@@ -210,13 +218,19 @@ def create_course(
             detail=f"Course with code '{payload.code}' already exists."
         )
 
+    instructor_id = payload.instructor_id
+    if current_user["role"] == "instructor":
+        if instructor_id and instructor_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Tutors can only create courses assigned to themselves.")
+        instructor_id = current_user["id"]
+
     # Verify instructor exists if provided
-    if payload.instructor_id:
-        instructor = db.query(User).filter(User.id == str(payload.instructor_id)).first()
+    if instructor_id:
+        instructor = db.query(User).filter(User.id == instructor_id).first()
         if not instructor or instructor.role != "instructor":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Valid instructor with ID '{payload.instructor_id}' not found."
+                detail=f"Valid instructor with ID '{instructor_id}' not found."
             )
 
     # Extract fields excluding instructor_id since Course doesn't store it directly
@@ -233,25 +247,15 @@ def create_course(
         db.flush()
         db.refresh(course)
 
-        # If an instructor was provided, optionally create a default session linking them
-        if payload.instructor_id:
-            default_session = SessionModel(
-                id=str(uuid.uuid4()),
-                course_id=course.id,
-                instructor_id=str(payload.instructor_id),
-                name=f"{course.code} - Default Session",
-                scheduled_start=course.created_at,
-                scheduled_end=course.created_at,
-                checkin_opens_at=course.created_at,
-                checkin_closes_at=course.created_at,
-                status="scheduled"
-            )
-            db.add(default_session)
+        if instructor_id:
+            db.add(CourseInstructorModel(course_id=course.id, instructor_id=instructor_id))
 
         db.commit()
         db.refresh(course)
 
-        return course
+        result = CourseResponse.model_validate(course)
+        result.instructor_id = instructor_id
+        return result
     except Exception as e:
         db.rollback()
         raise HTTPException(
@@ -279,16 +283,7 @@ def get_course_details(
     if _current_user.get("role") in {"instructor", "ta"}:
         require_course_staff_access(db, _current_user, course_id)
 
-    # Fetch associated instructor via SessionModel if needed
-    session_instructor = (
-        db.query(SessionModel, User)
-        .join(User, SessionModel.instructor_id == User.id)
-        .filter(SessionModel.course_id == course.id, SessionModel.instructor_id.isnot(None))
-        .first()
-    )
-    
-    inst_id = session_instructor[0].instructor_id if session_instructor else None
-    inst_name = session_instructor[1].full_name if session_instructor else "Unknown"
+    inst_id, inst_name = course_instructor(db, course.id)
 
     return CourseResponse(
         id=course.id,
@@ -332,16 +327,10 @@ def update_course_full_or_partial(
     # Check if user is admin
     is_admin = current_user.get("role") == "admin"
 
-    # Check if user is an assigned instructor for this course via SessionModel
-    user_id_str = current_user.get("id") or current_user.get("sub")
-    is_course_instructor = False
-    if user_id_str:
-        instructor_session = db.query(SessionModel).filter(
-            SessionModel.course_id == course_id,
-            SessionModel.instructor_id == str(user_id_str)
-        ).first()
-        if instructor_session:
-            is_course_instructor = True
+    is_course_instructor = (
+        current_user.get("role") == "instructor"
+        and course_id in staff_course_ids(db, current_user)
+    )
 
     if not (is_admin or is_course_instructor):
         raise HTTPException(
@@ -358,16 +347,7 @@ def update_course_full_or_partial(
         db.commit()
         db.refresh(course)
 
-        # Fetch instructor info for the response schema
-        session_instructor = (
-            db.query(SessionModel, User)
-            .join(User, SessionModel.instructor_id == User.id)
-            .filter(SessionModel.course_id == course.id, SessionModel.instructor_id.isnot(None))
-            .first()
-        )
-        
-        inst_id = session_instructor[0].instructor_id if session_instructor else None
-        inst_name = session_instructor[1].full_name if session_instructor else "Unknown"
+        inst_id, inst_name = course_instructor(db, course.id)
 
         return CourseResponse(
             id=course.id,
@@ -396,11 +376,13 @@ def update_course_full_or_partial(
         )
 
 
-# DELETE /courses/{course_id} - Soft-delete a course (Admin only)
+# DELETE /courses/{course_id} - Archive by default; explicitly delete all with permanent=true.
 @router.delete("/{course_id}", status_code=status.HTTP_204_NO_CONTENT)
 def soft_delete_course(
     course_id: str,
-    _admin: Dict[str, Any] = Depends(require_roles("admin")),
+    request: Request,
+    permanent: bool = Query(False),
+    current_user: Dict[str, Any] = Depends(require_roles("admin", "instructor")),
     db: Session = Depends(get_db)
 ):
     course = db.query(Course).filter(Course.id == course_id).first()
@@ -410,7 +392,27 @@ def soft_delete_course(
             detail=f"Course with ID '{course_id}' not found."
         )
 
-    course.is_active = False
+    require_course_staff_access(db, current_user, course_id)
+    if current_user["role"] != "admin":
+        assignment = db.get(CourseInstructorModel, course_id)
+        if assignment and assignment.instructor_id != current_user["id"]:
+            raise HTTPException(403, "Only the assigned course tutor can delete this course.")
+        if not assignment and db.query(SessionModel.id).filter(
+            SessionModel.course_id == course_id,
+            SessionModel.instructor_id != current_user["id"],
+        ).first():
+            raise HTTPException(403, "Ask an administrator to delete a course shared by multiple tutors.")
+
+    if permanent:
+        # Database foreign keys cascade to sessions, check-ins, risk signals,
+        # enrollments, recurrence links and tutor assignment in this transaction.
+        for lesson in db.query(SessionModel).filter(SessionModel.course_id == course_id).all():
+            add_audit_log(db, request, "session_deleted", user_id=current_user["id"],
+                          resource_type="session", resource_id=lesson.id,
+                          details=f"Deleted with course {course.code} ({course_id})")
+        db.delete(course)
+    else:
+        course.is_active = False
 
     try:
         db.commit()

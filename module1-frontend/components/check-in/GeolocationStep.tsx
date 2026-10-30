@@ -27,6 +27,7 @@ export function GeolocationStep({ onComplete, onError }: GeolocationStepProps) {
   const finished = useRef(false);
 
   useEffect(() => {
+    let active = true;
     if (!("geolocation" in navigator)) {
       onError("This browser does not support geolocation.");
       return;
@@ -36,7 +37,7 @@ export function GeolocationStep({ onComplete, onError }: GeolocationStepProps) {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        if (finished.current) return;
+        if (!active || finished.current) return;
         finished.current = true;
         onComplete({
           latitude: position.coords.latitude,
@@ -45,7 +46,7 @@ export function GeolocationStep({ onComplete, onError }: GeolocationStepProps) {
         });
       },
       (error) => {
-        if (finished.current) return;
+        if (!active || finished.current) return;
         finished.current = true;
         onError(mapGeoError(error));
       },
@@ -55,6 +56,7 @@ export function GeolocationStep({ onComplete, onError }: GeolocationStepProps) {
         maximumAge: 0,
       },
     );
+    return () => { active = false; };
   }, [onComplete, onError]);
 
   return (

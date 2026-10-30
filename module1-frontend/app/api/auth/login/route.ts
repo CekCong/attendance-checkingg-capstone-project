@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { isInstructorApp } from "@/lib/appSurface";
+import { AUTH_BACKEND_URL, authErrorMessage } from "@/lib/authBackend";
 
 const REFRESH_COOKIE = "refresh_token";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
@@ -11,30 +10,42 @@ export async function POST(request: Request) {
     password?: string;
   };
 
-  if (!body.email?.trim() || !body.password) {
-    return NextResponse.json({ detail: "Username and password are required" }, { status: 400 });
+  if (
+    !body || typeof body.email !== "string" || !body.email.trim() ||
+    typeof body.password !== "string" || !body.password
+  ) {
+    return NextResponse.json({ detail: "Email and password are required" }, { status: 400 });
   }
 
-  const backendResponse = await fetch(
-    `${BACKEND_URL}/api/v1/auth/login`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  let backendResponse: Response;
+  try {
+    backendResponse = await fetch(
+      `${AUTH_BACKEND_URL}/api/v1/auth/login`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: body.email.trim(),
+          password: body.password,
+        }),
+        signal: AbortSignal.timeout(15000),
       },
-      body: JSON.stringify({
-        email: body.email.trim(),
-        password: body.password,
-      }),
-    }
-  );
+    );
+  } catch {
+    return NextResponse.json(
+      { detail: "Unable to reach the account service. Please try again shortly." },
+      { status: 503 },
+    );
+  }
 
   const data = await backendResponse.json().catch(() => ({}));
 
   if (!backendResponse.ok) {
     return NextResponse.json(
       {
-        detail: data.detail ?? "Login failed",
+        detail: authErrorMessage(data.detail, "Login failed"),
       },
       {
         status: backendResponse.status,

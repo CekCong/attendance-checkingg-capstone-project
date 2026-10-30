@@ -5,6 +5,10 @@
 :root {
   --font-display: var(--font-syne), ui-sans-serif, sans-serif;
   --font-sans: var(--font-manrope), ui-sans-serif, sans-serif;
+  --danger-ink: #fecdd3;
+  --danger-surface: #3b1020;
+  --danger-border: #fb7185;
+  --danger-hover: #581c30;
 }
 
 html.dark {
@@ -25,7 +29,25 @@ html.light {
   --card-border: rgba(15, 23, 42, 0.12);
   --btn: #0f172a;
   --btn-ink: #f8fafc;
+  --danger-ink: #9f1239;
+  --danger-surface: #fff1f2;
+  --danger-border: #be123c;
+  --danger-hover: #ffe4e6;
 }
+
+.danger-trigger, .danger-surface {
+  color: var(--danger-ink);
+  background: var(--danger-surface);
+  border: 1px solid var(--danger-border);
+}
+.danger-trigger:hover:not(:disabled) { background: var(--danger-hover); }
+.danger-trigger:focus-visible, .danger-confirm:focus-visible {
+  outline: 3px solid var(--danger-border);
+  outline-offset: 3px;
+}
+.danger-confirm { color: #fff; background: #be123c; }
+.danger-confirm:hover:not(:disabled) { background: #9f1239; }
+.danger-error { color: var(--danger-ink); background: var(--danger-surface); }
 
 @layer utilities {
   .animate-fade-up {
