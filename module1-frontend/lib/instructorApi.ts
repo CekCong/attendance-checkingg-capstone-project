@@ -108,6 +108,7 @@ export async function reviewFlaggedCheckin(
 }
 
 export type BackendSession = {
+  series_id?: string | null;
   id: string;
   course_id: string;
   course_code: string;
@@ -125,8 +126,10 @@ export type BackendSession = {
   checked_in_count: number;
 };
 
-export async function fetchSessions(accessToken: string): Promise<BackendSession[]> {
-  return fetchAllPages<BackendSession>("/sessions/", accessToken);
+export async function fetchSessions(accessToken: string, range?: { start: string; end: string }): Promise<BackendSession[]> {
+  const filters = new URLSearchParams();
+  if (range) { filters.set("overlap_start", range.start); filters.set("end_date", range.end); }
+  return fetchAllPages<BackendSession>("/sessions/", accessToken, filters);
 }
 
 export type BackendCourse = {
@@ -232,4 +235,64 @@ export type BackendAuditLog = {
 
 export async function fetchAuditLogs(accessToken: string): Promise<BackendAuditLog[]> {
   return fetchAllPages<BackendAuditLog>("/audit/logs", accessToken);
+}
+
+export async function deleteCourseOrLesson(accessToken: string, scope: "course" | "lesson", id: string) {
+  const resource = scope === "course" ? "courses" : "sessions";
+  const response = await fetch(`${API_BASE}/api/v1/${resource}/${encodeURIComponent(id)}?permanent=true`, {
+    method: "DELETE", headers: authHeaders(accessToken),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(typeof error?.detail === "string" ? error.detail : "Unable to delete. Please try again.");
+  }
+}
+
+
+export async function createBackendCourse(
+  accessToken: string,
+  payload: { code: string; name: string; semester: string },
+): Promise<BackendCourse> {
+  const response = await fetch(`${API_BASE}/api/v1/courses/`, {
+    method: "POST",
+    headers: authHeaders(accessToken),
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof data.detail === "string"
+      ? data.detail
+      : "Unable to create course. Check the course details and try again.";
+    throw new Error(detail);
+  }
+  return data;
+}
+
+
+export type LessonPayload = {
+  course_id: string;
+  name: string;
+  session_type: "lecture" | "tutorial" | "lab" | "exam";
+  venue_name?: string;
+};
+export type RecurringLessonPayload = LessonPayload & {
+  request_id: string;
+  start_date: string;
+  end_date: string;
+  weekday: number;
+  start_time: string;
+  end_time: string;
+  timezone: "Asia/Singapore";
+};
+export async function createRecurringLessons(accessToken: string, payload: RecurringLessonPayload): Promise<{ count: number; series_id: string }> {
+  const response = await fetch(`${API_BASE}/api/v1/sessions/recurring`, {
+    method: "POST", headers: authHeaders(accessToken), body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof data.detail === "string" ? data.detail : Array.isArray(data.detail)
+      ? data.detail.map((item: { msg: string }) => item.msg).join(". ") : "Unable to schedule lessons.";
+    throw new Error(detail);
+  }
+  return data;
 }

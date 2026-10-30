@@ -4,6 +4,7 @@ import { SessionQrScanner } from "@/components/check-in/SessionQrScanner";
 import { GlassCard } from "@/components/check-in/GlassCard";
 import {
   studentList,
+  studentRequest,
   serverTime,
   type StudentSession,
   type Attendance,
@@ -24,6 +25,30 @@ export function StudentDashboard({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
+  const [passcode, setPasscode] = useState("");
+  const [resolving, setResolving] = useState(false);
+  useEffect(() => {
+    const readCode = () => {
+      const code = new URLSearchParams(window.location.hash.slice(1)).get("attendance");
+      if (code) setPasscode(code.slice(0, 32));
+    };
+    readCode();
+    window.addEventListener("hashchange", readCode);
+    return () => window.removeEventListener("hashchange", readCode);
+  }, []);
+
+  async function joinByCode() {
+    setResolving(true); setError("");
+    try {
+      const resolved = await studentRequest<{ session_id: string; qr_code: string }>("/attendance/resolve", token, {
+        method: "POST", body: JSON.stringify({ code: passcode }),
+      });
+      const selectedSession = await studentRequest<StudentSession>(`/sessions/${resolved.session_id}`, token);
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      onStartCheckIn(selectedSession, resolved.qr_code);
+    } catch (err) { setError(err instanceof Error ? err.message : "Unable to join this lesson."); }
+    finally { setResolving(false); }
+  }
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -64,8 +89,18 @@ export function StudentDashboard({
           Join a class
         </h1>
         <p className="mt-2 text-white/80">
-          Choose an active session for a course you are enrolled in.
+          Scan your tutor's QR with your phone camera, enter a passcode, or choose an active session below.
         </p>
+        <form className="mt-4 rounded-xl border border-white/25 p-3" onSubmit={(event) => { event.preventDefault(); void joinByCode(); }}>
+          <label className="block text-sm text-white">Attendance passcode
+            <input value={passcode} onChange={(event) => setPasscode(event.target.value)} maxLength={32} required
+              autoCapitalize="characters" autoComplete="off" spellCheck={false} placeholder="e.g. ABCD 2345"
+              className="mt-2 w-full rounded-xl border border-white/25 bg-sky-950/80 p-3 font-mono text-white" />
+          </label>
+          <button disabled={resolving || !passcode.trim()} className="mt-3 w-full rounded-xl bg-white/90 p-3 font-semibold text-sky-950 disabled:opacity-40">
+            {resolving ? "Checking code…" : "Join with passcode"}
+          </button>
+        </form>
         {loading ? (
           <p className="mt-4">Loading sessions…</p>
         ) : (

@@ -61,6 +61,13 @@ class CourseModel(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
+class CourseInstructorModel(Base):
+    __tablename__ = "course_instructors"
+
+    course_id = Column(String(36), ForeignKey("courses.id", ondelete="CASCADE"), primary_key=True)
+    instructor_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+
 class EnrollmentModel(Base):
     __tablename__ = "enrollments"
 
@@ -113,6 +120,23 @@ class SessionModel(Base):
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     course = relationship("CourseModel")
+
+class SessionSeriesModel(Base):
+    __tablename__ = "session_series"
+
+    id = Column(String(36), primary_key=True)
+    instructor_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    course_id = Column(String(36), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
+    payload_hash = Column(String(64), nullable=False)
+    schedule = Column(Text, nullable=False)
+
+
+class SessionOccurrenceModel(Base):
+    __tablename__ = "session_occurrences"
+
+    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True)
+    series_id = Column(String(36), ForeignKey("session_series.id", ondelete="CASCADE"), nullable=False, index=True)
+
 
 class DeviceModel(Base):
     __tablename__ = "devices"

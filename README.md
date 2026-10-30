@@ -97,6 +97,120 @@ docker-compose ps
 - Grafana: http://localhost:3001 (admin/admin)
 - Prometheus: http://localhost:9090
 
+### Local web sign-up
+
+Start Docker Desktop, then run from the project root:
+
+```bash
+docker compose up -d frontend dashboard face-recognition
+```
+
+Open http://localhost:3000 for students or http://localhost:8501 for tutors.
+Students can choose **Create a student account** and enter a name, email, and
+password of at least 8 characters. Staff accounts use Hongyu's existing
+administrator provisioning flow; public signup cannot grant instructor or admin
+roles. See [production identity](docs/PRODUCTION-IDENTITY.md).
+
+The web containers use `BACKEND_INTERNAL_URL=http://backend:8000` for server-side
+authentication and student API requests. Tutor API requests use `NEXT_PUBLIC_API_URL`.
+
+### Tutor courses
+
+Sign in to http://localhost:8501, then choose **New course** under **Your courses**.
+Enter a unique course code and name, choose an academic year/semester from the
+dropdown, and select **Create course**.
+The course is saved, assigned to your tutor account, and automatically selected
+for session creation. Use the course dropdown to switch between your courses.
+In **Lesson calendar**, select **Add lesson**. Choose a lesson title, type, and
+optional location. Select **Every week** to choose a weekday, inclusive start/end
+dates, and start/end times, or **Does not repeat** for a single lesson. Check the
+lesson-count/date preview, then save. All scheduling and calendar times use
+Singapore time (SGT); semester options do not assume official term dates or holidays.
+
+Use **Today**, the previous/next arrows, and **Day / Week / Month** to navigate the calendar.
+On laptops the calendar sits on the left and attendance tools, flagged check-ins,
+and analytics appear on the right. On smaller screens these sections stack.
+Select a lesson block to show its attendance controls in the right panel.
+Choose **Delete lesson or course…** in that panel to delete **this lesson only**
+(the selected date and time) or **Delete all** (the entire course and every lesson).
+For a course without lessons, use **Courses & semesters**, select the course,
+and choose **Delete course…**. Both choices require confirmation and permanently
+remove the associated attendance records; deleting a whole course also removes
+its enrollments. Deleting one recurring lesson leaves other dates and other
+lessons on the same day intact. Only the owning tutor or an administrator can delete.
+The calendar scrolls through all 24 hours; on smaller screens use Day view or
+scroll horizontally. Weekly schedules create separate attendance sessions for
+each date (up to one year). A conflict rejects the whole schedule, and retrying
+the same submission does not create duplicate lessons. Series editing and
+automatic holiday exclusions are not included.
+
+### Attendance QR and passcode
+
+**Demo mode is currently enabled in Docker Compose.** Tutors can generate QR codes
+and passcodes for any lesson date or time, including reopening past, closed, or
+cancelled lessons. Each generated code opens a fresh 15-minute check-in window.
+The tutor panel displays a **Demo mode** notice. Enrollment and student verification
+still apply, and closing a session stops check-ins until a tutor opens it again.
+To restore scheduled attendance restrictions, run
+`ATTENDANCE_DEMO_MODE=false docker compose up -d --no-build backend`.
+Outside Compose, this flag defaults to `false`.
+
+With demo mode disabled, the normal rules below apply.
+
+Select a lesson and choose **Generate QR & passcode** in the right panel. This activates
+the lesson and opens a 15-minute check-in window, capped at the lesson's end.
+Codes can be opened from 15 minutes before the scheduled start. Switch between
+**QR code** and **Passcode**; **Renew QR & passcode** invalidates the previous code and
+**Close session** stops further check-ins.
+The panel explains when a lesson is too early, ended, closed, or its code has
+expired. After expiry, choose **Generate new QR & passcode** during the lesson's
+attendance window. Selecting a calendar lesson alone does not open attendance.
+
+Under **Student website URL**, enter the address where students can reach the
+student portal. Use the shared HTTPS student URL for phones; `localhost:3000`
+only works on the same computer. Camera and location access require HTTPS on
+other devices. The student portal proxies attendance requests to `BACKEND_INTERNAL_URL`,
+so phones do not need direct access to backend port 8000.
+
+Students scan with their phone's Camera app or type the passcode in the student
+portal, sign in, confirm sensor consent, enroll their face if needed, allow location
+access, and complete the active liveness challenge. Device attestation and server
+verification remain enabled. The backend records the check-in and reports approved, flagged for review,
+or rejected. Students must already be enrolled in the course; a code does not
+bypass enrollment or verification. Face-matching courses still require face enrollment.
+
+QR images are generated locally by the backend. Student URLs can be changed
+without rotating a currently active passcode. No external QR service is used.
+
+```bash
+PYTHONPATH=module2-backend:tests/regression DATABASE_URL=sqlite:////tmp/saiv-tests.db \
+  python3 -m pytest tests/regression/test_calendar_attendance_merge.py -v
+```
+These tests use isolated databases, Redis on port 6380, and explicit biometric
+test doubles. They cover the new controls together with Hongyu's verification flow.
+
+Course assignments are stored in the `course_instructors` table, created by the
+schema migration service. Existing assignments through sessions remain supported.
+Recurring schedules and their occurrences are saved in `session_series` and
+`session_occurrences`, also created by the schema migration service.
+
+The legacy live course tests below require an isolated `SAIV_ENV=test` backend
+with `ALLOW_PRIVILEGED_SELF_REGISTRATION=true` and increased fixture rate limits.
+They must not be pointed at a production or shared deployment.
+
+```bash
+RUN_COURSE_TESTS=1 python3 -m unittest discover -s tests/regression -p test_tutor_courses.py -v
+RUN_COURSE_TESTS=1 python3 -m unittest discover -s tests/regression -p test_recurring_lessons.py -v
+docker compose exec -T dashboard node < tests/regression/calendar_helpers.cjs
+```
+
+To verify student registration and the staff-signup restriction on running portals
+(creates student test accounts):
+
+```bash
+RUN_WEB_AUTH_TESTS=1 python3 -m unittest discover -s tests/regression -p test_web_registration.py -v
+```
+
 ---
 
 ## Running Tests

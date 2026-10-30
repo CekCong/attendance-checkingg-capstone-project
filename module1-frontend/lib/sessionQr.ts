@@ -2,6 +2,11 @@
 export function readSessionQr(text: string, sessionId: string): string {
   if (text.length > 512) throw new Error("This is not a session verification code.");
   let code = text.trim();
+  if (/^https?:\/\//i.test(code)) {
+    // Extract only the code; never navigate to a scanned address.
+    try { code = new URLSearchParams(new URL(code).hash.slice(1)).get("attendance") ?? ""; }
+    catch { throw new Error("This is not a session verification code."); }
+  }
   if (code.startsWith("{")) {
     let payload;
     try { payload = JSON.parse(code); }

@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from .models import EnrollmentModel, SessionModel
+from .models import CourseInstructorModel, EnrollmentModel, SessionModel
 
 
 def staff_course_ids(db: Session, user: Dict[str, Any]) -> List[str]:
@@ -13,7 +13,10 @@ def staff_course_ids(db: Session, user: Dict[str, Any]) -> List[str]:
     assigned_courses = {
         course_id
         for (course_id,) in db.query(SessionModel.course_id)
-        .filter(SessionModel.instructor_id == user_id)
+        .filter(SessionModel.instructor_id == user_id).union(
+            db.query(CourseInstructorModel.course_id)
+            .filter(CourseInstructorModel.instructor_id == user_id)
+        )
         .all()
     }
 

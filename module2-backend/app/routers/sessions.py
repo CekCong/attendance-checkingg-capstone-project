@@ -12,7 +12,7 @@ import os
 from dotenv import load_dotenv
 
 from app.security import get_current_user
-from app.models import CourseModel as Course, SessionModel, EnrollmentModel as CourseEnrollment, CheckinModel as AttendanceRecord
+from app.models import CourseModel as Course, SessionModel, EnrollmentModel as CourseEnrollment, CheckinModel as AttendanceRecord, SessionOccurrenceModel
 from app.database import get_db
 from app.course_access import require_course_staff_access, staff_course_ids
 from app.audit import add_audit_log
@@ -102,6 +102,7 @@ class SessionActiveResponse(BaseModel):
 
 class SessionListItemResponse(BaseModel):
     id: str
+    series_id: Optional[str] = None
     course_id: str
     course_code: str
     course_name: str
@@ -223,6 +224,7 @@ def list_sessions(
     instructor_id: Optional[str] = Query(None, description="Filter by instructor"),
     start_date: Optional[datetime] = Query(None, description="Sessions starting after this date"),
     end_date: Optional[datetime] = Query(None, description="Sessions starting before this date"),
+    overlap_start: Optional[datetime] = Query(None, description="Sessions ending after this date"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -247,10 +249,14 @@ def list_sessions(
     if start_date:
         query = query.filter(SessionModel.scheduled_start >= start_date)
     if end_date:
-        query = query.filter(SessionModel.scheduled_start <= end_date)
+        query = query.filter(SessionModel.scheduled_start < end_date)
+    if overlap_start:
+        query = query.filter(SessionModel.scheduled_end > overlap_start)
 
     total = query.count()
-    sessions = query.options(joinedload(SessionModel.course)).order_by(SessionModel.scheduled_start.desc(), SessionModel.id).offset(offset).limit(limit).all()
+    sessions = query.options(joinedload(SessionModel.course)).order_by(SessionModel.scheduled_start, SessionModel.id).offset(offset).limit(limit).all()
+    series_ids = dict(db.query(SessionOccurrenceModel.session_id, SessionOccurrenceModel.series_id)
+                      .filter(SessionOccurrenceModel.session_id.in_([s.id for s in sessions])).all())
 
     course_ids = {s.course_id for s in sessions}
     session_ids = [s.id for s in sessions]
@@ -268,6 +274,7 @@ def list_sessions(
         items.append(
             SessionListItemResponse(
                 id=s.id,
+                series_id=series_ids.get(s.id),
                 course_id=s.course_id,
                 course_code=s.course.code if s.course else "",
                 course_name=s.course.name if s.course else "",
@@ -470,11 +477,12 @@ def update_session(
 def delete_session(
     id: str,
     request: Request,
+    permanent: bool = Query(False, description="Also delete attendance records, regardless of session status"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Role check: Instructor only
-    if current_user.get("role") != "instructor":
+    if current_user.get("role") not in {"instructor", "admin"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. Instructor role required."
@@ -488,18 +496,18 @@ def delete_session(
         )
 
     # Ownership check: Must be the session owner
-    if session_obj.instructor_id != current_user.get("id"):
+    if current_user.get("role") != "admin" and session_obj.instructor_id != current_user.get("id"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. You can only delete sessions you own."
         )
 
     # Status check: Only 'scheduled' sessions can be deleted
-    if session_obj.status != SessionStatus.scheduled:
+    if not permanent and session_obj.status != SessionStatus.scheduled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"Cannot delete session with status '{session_obj.status.value}'. "
+                f"Cannot delete session with status '{session_obj.status}'. "
                 "Only sessions with status 'scheduled' can be deleted. "
                 "Active or closed sessions should be cancelled instead."
             )

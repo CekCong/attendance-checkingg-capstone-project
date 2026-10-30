@@ -1,11 +1,9 @@
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 export async function studentRequest<T>(
   path: string,
   token: string | null,
   options: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`${API}/api/v1${path}`, {
+  const response = await fetch(`/api/student${path}`, {
     signal: AbortSignal.timeout(90_000),
     ...options,
     cache: "no-store",
