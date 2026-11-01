@@ -15,6 +15,7 @@ from ..retention import ACCOUNT_RETENTION_DAYS
 from ..course_access import staff_course_ids
 from ..services.face_client import FaceServiceError, enroll_face as enroll_face_with_service
 from ..audit import add_audit_log
+from ..roster import link_matriculation, normalize_matriculation
 
 # --- SQLAlchemy Model ---
 class UserRole(str, enum.Enum):
@@ -29,6 +30,12 @@ class UpdateMeBody(BaseModel):
     full_name: Optional[str] = Field(None, max_length=255)
     camera_consent: Optional[bool] = None
     geolocation_consent: Optional[bool] = None
+    matriculation_number: Optional[str] = None
+
+    @field_validator("matriculation_number")
+    @classmethod
+    def validate_number(cls, value):
+        return normalize_matriculation(value)
 
     @field_validator("full_name")
     @classmethod
@@ -54,6 +61,7 @@ class UserResponse(BaseModel):
     id: str
     email: EmailStr
     full_name: str
+    matriculation_number: Optional[str] = None
     role: UserRole
     is_active: bool
     camera_consent: bool
@@ -160,6 +168,9 @@ def update_me(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    updated_fields = list(update_data)
+    if "matriculation_number" in update_data:
+        link_matriculation(db, request, user, update_data.pop("matriculation_number"))
     if update_data.get("camera_consent") is False:
         user.face_embedding_hash = None
         user.face_enrolled = False
@@ -172,7 +183,7 @@ def update_me(
     add_audit_log(
         db, request, "user_updated",
         user_id=user.id, resource_type="user", resource_id=user.id,
-        details=f"updated_fields={','.join(update_data.keys())}",
+        details=f"updated_fields={','.join(updated_fields)}",
     )
     db.commit()
     db.refresh(user)

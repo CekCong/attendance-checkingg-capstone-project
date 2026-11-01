@@ -52,6 +52,7 @@ export async function forwardAuth(
         );
       }
       body = { ...body, full_name: input.full_name.trim(), role: "student" };
+      if (input.matriculation_number !== undefined) body.matriculation_number = input.matriculation_number;
     }
   } else if (action === "refresh") {
     if (!refreshToken) {

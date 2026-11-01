@@ -374,7 +374,7 @@ export function InstructorDashboard() {
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(320px,1fr)]">
       <div className="min-w-0 space-y-4 lg:sticky lg:top-4">
       <details className="rounded-2xl border border-white/20 bg-white/10">
-      <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-white">Courses & semesters</summary>
+      <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-white">Courses, students & semesters</summary>
       <CourseManager
         accessToken={accessToken}
         courses={courses}

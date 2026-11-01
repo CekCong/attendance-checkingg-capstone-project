@@ -5,6 +5,7 @@ import { GlassCard } from "@/components/check-in/GlassCard";
 import { createBackendCourse, type BackendCourse } from "@/lib/instructorApi";
 import { semesterOptions } from "@/lib/calendar";
 import { DeleteCourseControl, type Deletion } from "./DeleteCourseControl";
+import { CourseRoster } from "./CourseRoster";
 
 type Props = {
   accessToken: string | null;
@@ -81,6 +82,7 @@ export function CourseManager({ accessToken, courses, selectedCourseId, onSelect
           ))}
         </select>
       </label>
+      {selectedCourse && <CourseRoster key={selectedCourse.id} courseId={selectedCourse.id} courseCode={selectedCourse.code} accessToken={accessToken} />}
       {selectedCourse && <DeleteCourseControl key={selectedCourse.id} course={selectedCourse} accessToken={accessToken}
         disabled={pending} onDeleted={(deletion) => { setNotice(null); onDeleted(deletion); }} />}
       {open && (

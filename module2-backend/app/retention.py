@@ -22,6 +22,7 @@ def cleanup_expired_users(db: Session) -> int:
         db.query(EnrollmentModel).filter(EnrollmentModel.student_id == user.id).delete(synchronize_session=False)
         user.email = f"deleted-{user.id}@deleted.example.com"
         user.full_name = "Deleted account"
+        user.matriculation_number = None
         user.hashed_password = "!deleted"
         user.face_embedding_hash = None
         user.face_enrolled = False

@@ -13,6 +13,7 @@ export function ProfileForm() {
   const { preference, setPreference } = useTheme();
   const [username, setUsername] = useState(user?.username ?? "");
   const [fullName, setFullName] = useState(user?.full_name ?? "");
+  const [matriculation, setMatriculation] = useState(user?.matriculation_number ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
   const [language, setLanguage] = useState(user?.language ?? "en");
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
@@ -42,7 +43,8 @@ export function ProfileForm() {
     }
     setPendingProfile(true);
     try {
-      await updateProfile({ full_name: fullName.trim(), language });
+      await updateProfile({ full_name: fullName.trim(), language,
+        ...(!user?.matriculation_number && matriculation.trim() ? { matriculation_number: matriculation.trim().toUpperCase() } : {}) });
       setProfileMessage(
         "Profile saved. Language preference applies to this device.",
       );
@@ -99,6 +101,16 @@ export function ProfileForm() {
           Account
         </h2>
         <form className="mt-5 space-y-4" onSubmit={onSaveProfile}>
+          {user.role === "student" && <label className="block text-sm font-medium text-white/90">Matriculation number
+            <input value={user.matriculation_number || matriculation} readOnly={Boolean(user.matriculation_number)}
+              onChange={(event) => setMatriculation(event.target.value)} minLength={3} maxLength={32}
+              pattern="[A-Za-z0-9][A-Za-z0-9-]{2,31}" autoCapitalize="characters" autoComplete="off" spellCheck={false}
+              placeholder="Link your student number"
+              className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white" />
+            <span className="mt-2 block text-xs text-white/75">{user.matriculation_number
+              ? "Linked to your account. Contact an administrator if this needs correcting."
+              : "Enter your own number and save to join courses where your tutor has uploaded your matriculation number."}</span>
+          </label>}
           <label className="block text-sm font-medium text-white/90">
             Username
             <input

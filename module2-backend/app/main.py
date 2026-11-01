@@ -108,6 +108,7 @@ from .routers import (
     export,
     sessions,
     recurring_sessions,
+    course_rosters,
     attendance_codes,
     stats,
     users,
@@ -224,6 +225,7 @@ app.add_middleware(DatabaseAdmissionMiddleware)
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(courses.router, prefix="/api/v1")
 app.include_router(recurring_sessions.router, prefix="/api/v1")
+app.include_router(course_rosters.router, prefix="/api/v1")
 app.include_router(attendance_codes.router, prefix="/api/v1")
 app.include_router(sessions.router, prefix="/api/v1")
 app.include_router(devices.router, prefix="/api/v1")

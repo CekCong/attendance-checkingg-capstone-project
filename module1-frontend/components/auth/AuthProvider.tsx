@@ -21,6 +21,7 @@ import {
 const ACCESS_STORAGE_KEY = "saiv_access_token";
 
 export type ProfileUpdate = {
+  matriculation_number?: string;
   username?: string;
   full_name?: string;
   language?: string;
@@ -172,7 +173,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!accessToken) throw new Error("Please sign in again.");
       const saved = await studentRequest<AuthUser>("/users/me", accessToken, {
         method: "PUT",
-        body: JSON.stringify({ full_name: patch.full_name }),
+        body: JSON.stringify({ full_name: patch.full_name, matriculation_number: patch.matriculation_number }),
       });
       const next = normalizeUser({
         ...saved,

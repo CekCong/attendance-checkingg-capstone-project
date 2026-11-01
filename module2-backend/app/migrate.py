@@ -37,6 +37,9 @@ def migrate(database_engine=engine):
         columns = {column["name"] for column in inspect(connection).get_columns("users")}
         if "auth_version" not in columns:
             connection.execute(text("ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0"))
+        if "matriculation_number" not in columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN matriculation_number VARCHAR(32)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_matriculation_number ON users (matriculation_number)"))
         if connection.dialect.name == "postgresql":
             for action in AUDIT_ACTION_VALUES:
                 connection.execute(text(f"ALTER TYPE audit_action_enum ADD VALUE IF NOT EXISTS '{action}'"))
@@ -84,7 +87,7 @@ def provision_runtime_role(database_engine=engine):
 
 def check_runtime_database(database_engine=engine):
     with database_engine.connect() as connection:
-        connection.execute(text("SELECT auth_version FROM users LIMIT 0"))
+        connection.execute(text("SELECT auth_version, matriculation_number FROM users LIMIT 0"))
         if connection.dialect.name == "postgresql":
             unsafe = connection.execute(text("""SELECT
                 (SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user)

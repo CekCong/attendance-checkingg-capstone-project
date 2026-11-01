@@ -81,6 +81,7 @@ class EnrolledStudentDetail(BaseModel):
     student_id: uuid.UUID
     student_email: str
     student_name: str
+    matriculation_number: Optional[str] = None
     enrolled_at: datetime
     is_active: bool
     face_enrolled: bool
@@ -397,6 +398,7 @@ def get_course_enrollments(
             student_id=student.id,
             student_email=student.email,
             student_name=student.full_name,
+            matriculation_number=student.matriculation_number,
             enrolled_at=enr.enrolled_at,
             is_active=enr.is_active,
             face_enrolled=student.face_enrolled

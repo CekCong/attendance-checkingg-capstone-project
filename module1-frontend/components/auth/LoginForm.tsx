@@ -8,6 +8,7 @@ export function LoginForm() {
   const instructorApp = isInstructorApp();
   const [register, setRegister] = useState(false);
   const [fullName, setFullName] = useState("");
+  const [matriculation, setMatriculation] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -21,7 +22,7 @@ export function LoginForm() {
         const response = await fetch("/api/auth/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password, full_name: fullName }),
+          body: JSON.stringify({ email, password, full_name: fullName, matriculation_number: matriculation.trim().toUpperCase() }),
         });
         const data = await response.json();
         if (!response.ok)
@@ -51,6 +52,12 @@ export function LoginForm() {
           : "Sign in to enroll your face and record attendance."}
       </p>
       <form onSubmit={submit} className="mt-6 space-y-4">
+        {register && <label className="block">Matriculation number
+          <input className={input} required minLength={3} maxLength={32} pattern="[A-Za-z0-9][A-Za-z0-9-]{2,31}"
+            autoCapitalize="characters" autoComplete="off" spellCheck={false} value={matriculation}
+            onChange={(event) => setMatriculation(event.target.value)} placeholder="e.g. U2345678A" />
+          <span className="mt-1 block text-xs">Use your own student number. Courses on your tutor's roster will be linked automatically.</span>
+        </label>}
         {register && (
           <label className="block">
             Full name

@@ -16,6 +16,7 @@ import uuid
 from ..rate_limit import check_rate_limit as apply_rate_limit, enforce_rate_limit
 from ..audit import add_audit_log
 from ..runtime_security import privileged_registration_enabled
+from ..roster import link_matriculation, normalize_matriculation
 from ..security import (
     create_access_token,
     create_refresh_token,
@@ -62,6 +63,12 @@ class RegisterBody(BaseModel):
     password: str = Field(min_length=8)
     full_name: str = Field(min_length=1)
     role: Role = "student"
+    matriculation_number: Optional[str] = None
+
+    @field_validator("matriculation_number")
+    @classmethod
+    def validate_number(cls, value):
+        return normalize_matriculation(value)
 
     @field_validator("full_name")
     @classmethod
@@ -133,6 +140,8 @@ async def register(body: RegisterBody, request: Request, db: Session = Depends(g
 
     db.add(new_user)
     db.flush()
+    if body.matriculation_number:
+        link_matriculation(db, request, new_user, body.matriculation_number)
     add_audit_log(
         db,
         request,

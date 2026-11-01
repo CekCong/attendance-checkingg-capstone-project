@@ -133,7 +133,7 @@ and analytics appear on the right. On smaller screens these sections stack.
 Select a lesson block to show its attendance controls in the right panel.
 Choose **Delete lesson or course…** in that panel to delete **this lesson only**
 (the selected date and time) or **Delete all** (the entire course and every lesson).
-For a course without lessons, use **Courses & semesters**, select the course,
+For a course without lessons, use **Courses, students & semesters**, select the course,
 and choose **Delete course…**. Both choices require confirmation and permanently
 remove the associated attendance records; deleting a whole course also removes
 its enrollments. Deleting one recurring lesson leaves other dates and other
@@ -143,6 +143,46 @@ scroll horizontally. Weekly schedules create separate attendance sessions for
 each date (up to one year). A conflict rejects the whole schedule, and retrying
 the same submission does not create duplicate lessons. Series editing and
 automatic holiday exclusions are not included.
+
+### Enrolling students with a CSV roster
+
+In the tutor dashboard, open **Courses, students & semesters**, select a course,
+then expand **Enroll students · Upload CSV**. Download the template or upload a
+UTF-8 CSV with this column (numbers are text, so preserve leading zeroes in Excel):
+
+```csv
+matriculation_number
+U2345678A
+U2345679B
+```
+
+Preview the matches, then choose **Import roster into [course]**. Registered
+students with matching numbers are enrolled immediately. Unknown numbers remain
+pending until the student signs up or links their number in **Profile**. The
+**Uploaded roster** list shows pending and enrolled statuses; **Refresh** updates it.
+Imports add to the course and do not remove other students. Repeated rows/imports
+do not create duplicate enrollments. Invalid files show row errors before any
+rows are saved. Limit: 1,000 rows and 1 MB per upload.
+
+New student signup asks for a matriculation number. Existing students can link it
+once in Profile. Numbers are trimmed, uppercased, and unique across accounts;
+after linking, students cannot change or remove the number themselves. Student
+**My courses** shows their enrollments. Joining a lesson still uses the tutor's
+QR/passcode followed by the existing verification flow.
+
+For existing installations, apply the new schema before restarting the backend:
+
+```bash
+docker compose run --rm --no-deps db-migrate
+docker compose restart backend
+```
+
+Regression check (isolated databases; Redis on port 6380):
+
+```bash
+PYTHONPATH=module2-backend:tests/regression DATABASE_URL=sqlite:////tmp/saiv-tests.db \
+  python3 -m pytest tests/regression/test_course_rosters.py -v
+```
 
 ### Attendance QR and passcode
 

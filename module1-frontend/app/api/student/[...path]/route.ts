@@ -4,7 +4,7 @@ import { AUTH_BACKEND_URL } from "@/lib/authBackend";
 async function forward(request: Request, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;
   const resource = path.join("/");
-  const allowed = /^(users\/me(?:\/face\/enroll)?|devices(?:\/[a-zA-Z0-9-]+)?|sessions\/[a-zA-Z0-9-]+|checkins(?:\/[a-zA-Z0-9-]+)?|auth\/password|attendance\/resolve)$/.test(resource);
+  const allowed = /^(users\/me(?:\/face\/enroll)?|devices(?:\/[a-zA-Z0-9-]+)?|sessions\/[a-zA-Z0-9-]+|checkins(?:\/[a-zA-Z0-9-]+)?|enrollments\/my-enrollments|auth\/password|attendance\/resolve)$/.test(resource);
   if (!allowed) return NextResponse.json({ detail: "Not found" }, { status: 404 });
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) return NextResponse.json({ detail: "Please sign in." }, { status: 401 });

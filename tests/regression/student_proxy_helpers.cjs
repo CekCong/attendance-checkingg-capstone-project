@@ -33,6 +33,8 @@ async function send(method, path, authenticated = true, body) {
   const response = await send('GET', 'sessions/my-sessions?status=active&limit=100');
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.equal(calls.at(-1).url, 'http://backend:8000/api/v1/sessions/my-sessions?status=active&limit=100');
+  assert.equal((await send('GET', 'enrollments/my-enrollments')).status, 200);
+  assert.equal(calls.at(-1).url, 'http://backend:8000/api/v1/enrollments/my-enrollments');
   const count = calls.length;
   assert.equal((await send('POST', 'attendance/resolve', false)).status, 401);
   assert.equal((await send('POST', 'admin/users/bulk')).status, 404);

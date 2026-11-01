@@ -2,6 +2,8 @@
 import { useEffect, useState } from "react";
 import { SessionQrScanner } from "@/components/check-in/SessionQrScanner";
 import { GlassCard } from "@/components/check-in/GlassCard";
+import Link from "next/link";
+import { useAuth } from "@/components/auth/AuthProvider";
 import {
   studentList,
   studentRequest,
@@ -17,6 +19,8 @@ export function StudentDashboard({
   token: string;
   onStartCheckIn: (session: StudentSession, qrCode: string) => void;
 }) {
+  const { user } = useAuth();
+  const [courses, setCourses] = useState<{ id: string; course_code: string; course_name: string; semester: string; is_active: boolean }[]>([]);
   const [sessions, setSessions] = useState<StudentSession[]>([]);
   const [history, setHistory] = useState<Attendance[]>([]);
   const [selected, setSelected] = useState("");
@@ -58,11 +62,13 @@ export function StudentDashboard({
         token,
       ),
       studentList<Attendance>("/checkins/my-checkins", token),
+      studentRequest<{ id: string; course_code: string; course_name: string; semester: string; is_active: boolean }[]>("/enrollments/my-enrollments", token),
     ])
-      .then(([items, records]) => {
+      .then(([items, records, enrollments]) => {
         if (active) {
           setSessions(items);
           setHistory(records);
+          setCourses(enrollments.filter((item) => item.is_active));
           setError("");
         }
       })
@@ -84,6 +90,15 @@ export function StudentDashboard({
   );
   return (
     <div className="flex w-full flex-col gap-4">
+      <GlassCard className="p-5">
+        <h2 className="text-xl font-semibold text-white">My courses</h2>
+        {user?.matriculation_number ? <p className="mt-1 text-sm text-white/75">Matriculation number: {user.matriculation_number}</p>
+          : <p className="mt-2 text-sm text-white/80"><Link href="/profile" className="font-semibold underline">Link your matriculation number in Profile</Link> to join courses from your tutor's CSV roster.</p>}
+        <ul className="mt-3 space-y-2 text-sm text-white">
+          {courses.map((course) => <li key={course.id} className="rounded-xl border border-white/20 p-3"><strong>{course.course_code}</strong> · {course.course_name}<span className="mt-1 block text-xs text-white/70">{course.semester}</span></li>)}
+        </ul>
+        {!courses.length && !loading && <p className="mt-2 text-sm text-white/70">No enrolled courses yet. Ask your tutor to upload your matriculation number, then refresh sessions and history below.</p>}
+      </GlassCard>
       <GlassCard className="p-6">
         <h1 className="font-display text-3xl font-semibold text-white">
           Join a class
