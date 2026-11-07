@@ -17,4 +17,6 @@ export type GeoCoordinates = {
 export type CheckInResult = {
   id: string;
   status: "approved" | "flagged" | "rejected" | "pending" | "appealed";
+  rejection_reasons?: string[];
+  biometric_demo_mode?: boolean;
 };

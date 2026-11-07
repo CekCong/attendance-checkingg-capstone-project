@@ -82,8 +82,8 @@ export function CourseManager({ accessToken, courses, selectedCourseId, onSelect
           ))}
         </select>
       </label>
-      {selectedCourse && <CourseRoster key={selectedCourse.id} courseId={selectedCourse.id} courseCode={selectedCourse.code} accessToken={accessToken} />}
-      {selectedCourse && <DeleteCourseControl key={selectedCourse.id} course={selectedCourse} accessToken={accessToken}
+      {selectedCourse && <CourseRoster key={`roster-${selectedCourse.id}`} courseId={selectedCourse.id} courseCode={selectedCourse.code} accessToken={accessToken} />}
+      {selectedCourse && <DeleteCourseControl key={`delete-${selectedCourse.id}`} course={selectedCourse} accessToken={accessToken}
         disabled={pending} onDeleted={(deletion) => { setNotice(null); onDeleted(deletion); }} />}
       {open && (
         <form id="new-course-form" onSubmit={createCourse} className="mt-5 border-t border-white/15 pt-5">

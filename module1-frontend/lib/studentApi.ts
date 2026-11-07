@@ -37,6 +37,7 @@ export type StudentSession = {
   checkin_opens_at: string;
   checkin_closes_at: string;
   qr_code_enabled: boolean;
+  biometric_demo_mode?: boolean;
 };
 export type StudentProfile = {
   id: string;
@@ -55,6 +56,8 @@ export type Attendance = {
   status: "approved" | "flagged" | "rejected" | "pending" | "appealed";
   checked_in_at: string;
   risk_score: number;
+  rejection_reasons?: string[];
+  biometric_demo_mode?: boolean;
 };
 export type LivenessTicket = {
   challenge_id: string;

@@ -2,9 +2,9 @@
 import { useEffect, useRef, useState } from "react";
 import { readSessionQr } from "@/lib/sessionQr";
 
-type Props = { sessionId: string; onCode: (code: string) => void; onClose: () => void };
+type Props = { onCode: (code: string) => void; onClose: () => void };
 
-export function SessionQrScanner({ sessionId, onCode, onClose }: Props) {
+export function SessionQrScanner({ onCode, onClose }: Props) {
   const video = useRef<HTMLVideoElement>(null);
   const callbacks = useRef({ onCode, onClose });
   callbacks.current = { onCode, onClose };
@@ -51,7 +51,7 @@ export function SessionQrScanner({ sessionId, onCode, onClose }: Props) {
               const found = jsQR(frame.data, frame.width, frame.height, { inversionAttempts: "attemptBoth" });
               if (found) {
                 try {
-                  const code = readSessionQr(found.data, sessionId);
+                  const code = readSessionQr(found.data);
                   stop(); callbacks.current.onCode(code); return;
                 } catch (error) { setMessage((error as Error).message); }
               }
@@ -69,7 +69,7 @@ export function SessionQrScanner({ sessionId, onCode, onClose }: Props) {
     }
     void start();
     return () => { stop(); document.removeEventListener("visibilitychange", hidden); };
-  }, [sessionId]);
+  }, []);
   return <section aria-label="Session QR scanner" className="mt-4 rounded-xl border border-white/30 p-3">
     <video ref={video} muted playsInline aria-label="QR camera preview" className="w-full rounded-lg" />
     <p role="status" className="mt-2">{message}</p>

@@ -20,7 +20,7 @@ const MESSAGES = {
   ],
   rejected: [
     "Check-in rejected",
-    "Your check-in did not pass verification. Contact your instructor to review the record.",
+    "Your attendance has not been approved. Review the reason below before trying again.",
   ],
   pending: [
     "Check-in pending",
@@ -33,11 +33,13 @@ export function ResultStep({
   result,
   errorMessage,
   onReset,
+  onRetry,
 }: {
   variant: "SUCCESS" | "ERROR";
   result: CheckInResult | null;
   errorMessage: string | null;
   onReset: () => void;
+  onRetry?: () => void;
 }) {
   const message =
     variant === "SUCCESS" && result
@@ -52,6 +54,22 @@ export function ResultStep({
       <p role="status" className="mt-4">
         {message[1]}
       </p>
+      {result?.biometric_demo_mode && <p className="mt-3 text-sm">Demo record: face and liveness checks were bypassed.</p>}
+      {variant === "SUCCESS" && result?.status === "rejected" && (
+        <div className="mt-4 text-left">
+          <h3 className="font-semibold">Why it was rejected</h3>
+          <ul className="mt-2 list-disc space-y-2 pl-5 text-sm">
+            {(result.rejection_reasons?.length ? result.rejection_reasons : ["A detailed reason is unavailable. Contact your instructor for help."])
+              .map((reason) => <li key={reason}>{reason}</li>)}
+          </ul>
+          {onRetry && <>
+            <p className="mt-3 text-sm">You can retry while attendance is open. We will request a fresh location and a new verification challenge.</p>
+            <button type="button" onClick={onRetry} className="mt-4 w-full rounded-xl bg-white p-3 font-semibold text-sky-950">
+              Retry attendance
+            </button>
+          </>}
+        </div>
+      )}
       {result && <p className="mt-4 text-xs">Record: {result.id}</p>}
       <button
         onClick={onReset}

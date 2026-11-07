@@ -618,10 +618,10 @@ export function InstructorDashboard() {
           })}
         </div>
       </GlassCard>
+      <GlassCard>
       <details className="group">
-        <summary className="cursor-pointer list-none">
-          <GlassCard className="p-5">
-            <div className="flex items-center justify-between">
+        <summary className="cursor-pointer list-none p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-white sm:p-6 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center justify-between gap-4">
               <div>
                 <h2 className="font-display text-xl font-semibold text-white">
                   Attendance records & export
@@ -633,9 +633,8 @@ export function InstructorDashboard() {
               <span className="text-sm text-white/60 group-open:hidden">Show</span>
               <span className="hidden text-sm text-white/60 group-open:inline">Hide</span>
             </div>
-          </GlassCard>
         </summary>
-        <GlassCard className="mt-3 p-5 sm:p-6">
+        <div className="border-t border-white/15 p-5 sm:p-6">
           <div className="flex flex-wrap items-center gap-3">
             <label className="text-sm text-white/80">
               Session
@@ -682,12 +681,13 @@ export function InstructorDashboard() {
               {reportLoading ? <p>Loading report…</p> : <RecordsTable records={filteredRecords} />}
             </div>
           )}
-        </GlassCard>
+        </div>
       </details>
+      </GlassCard>
+      <GlassCard>
       <details className="group">
-        <summary className="cursor-pointer list-none">
-          <GlassCard className="p-5">
-            <div className="flex items-center justify-between">
+        <summary className="cursor-pointer list-none p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-white sm:p-6 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center justify-between gap-4">
               <div>
                 <h2 className="font-display text-xl font-semibold text-white">
                   Audit log explorer
@@ -705,10 +705,9 @@ export function InstructorDashboard() {
                 Hide
               </span>
             </div>
-          </GlassCard>
         </summary>
 
-        <GlassCard className="mt-3 p-5 sm:p-6">
+        <div className="border-t border-white/15 p-5 sm:p-6">
 
           <div className="flex flex-wrap gap-3">
 
@@ -806,8 +805,9 @@ export function InstructorDashboard() {
             )}
           </div>
 
-        </GlassCard>
+        </div>
       </details>
+      </GlassCard>
       </aside>
       </div>
     </div>

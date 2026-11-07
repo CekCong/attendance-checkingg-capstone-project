@@ -1,5 +1,5 @@
 /** Read only attendance codes. Scanned URLs never become navigation targets. */
-export function readSessionQr(text: string, sessionId: string): string {
+export function readSessionQr(text: string, sessionId?: string): string {
   if (text.length > 512) throw new Error("This is not a session verification code.");
   let code = text.trim();
   if (/^https?:\/\//i.test(code)) {
@@ -11,7 +11,9 @@ export function readSessionQr(text: string, sessionId: string): string {
     let payload;
     try { payload = JSON.parse(code); }
     catch { throw new Error("This is not a session verification code."); }
-    if (payload?.v !== 1 || payload.session_id !== sessionId)
+    if (payload?.v !== 1 || typeof payload.session_id !== "string")
+      throw new Error("This is not a session verification code.");
+    if (sessionId && payload.session_id !== sessionId)
       throw new Error("This QR code is for a different session. Check your selection.");
     code = payload.code;
   }

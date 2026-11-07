@@ -7,12 +7,23 @@ from app.services.face_detector import detect_face
 from app.services.face_quality import calculate_quality_score
 from app.services.similarity import hamming_distance
 from app.services.sim_hash import SIMHASH_BITS
+from app.schemas.face import CameraReadinessRequest, CameraReadinessResponse
+from app.services.camera_readiness import camera_readiness
 
 router = APIRouter(tags=["Face"])
 
 FACE_DETECTION_THRESHOLD = 0.70
 FACE_QUALITY_THRESHOLD = 0.50
 FACE_MATCH_THRESHOLD = 0.70
+
+
+@router.post("/face/readiness", response_model=CameraReadinessResponse)
+def check_camera_readiness(request: CameraReadinessRequest):
+    try:
+        image = decode_base64_image(request.image)
+    except ValueError as exc:
+        raise HTTPException(400, "The camera image could not be read. Please try again.") from exc
+    return camera_readiness(image)
 
 # =============================================================================
 # FACE ENROLLMENT ENDPOINT (REQUIRED - 4 points in public tests)

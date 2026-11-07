@@ -43,18 +43,24 @@ def setup_page(browser, status='approved', camera_denied=False, location_denied=
         page.add_init_script("navigator.mediaDevices.getUserMedia = async () => { throw new DOMException('Denied', 'NotAllowedError'); };")
     if location_denied:
         page.add_init_script("navigator.geolocation.getCurrentPosition = (ok, fail) => fail({code:1, PERMISSION_DENIED:1});")
-    state = {'consent': None, 'enrolled': False, 'submissions': [], 'public_key': None, 'challenge': 'browser-device-nonce'}
+    state = {'consent': None, 'enrolled': False, 'submissions': [], 'public_key': None, 'challenge': 'browser-device-nonce',
+             'readiness': {'ready': True, 'message': 'Ready', 'warnings': []}}
     payload = base64.urlsafe_b64encode(json.dumps({'exp': int(time.time()) + 3600}).encode()).decode().rstrip('=')
     token = f'test.{payload}.signature'
     now = datetime.now(timezone.utc)
     session = {'id': 'session-browser', 'course_id': 'course-browser', 'name': 'Real API Session', 'status': 'active',
                'checkin_opens_at': (now - timedelta(minutes=5)).isoformat(), 'checkin_closes_at': (now + timedelta(hours=1)).isoformat(), 'qr_code_enabled': False}
     def handler(route):
-        path = urlparse(route.request.url).path
+        path = urlparse(route.request.url).path.replace('/api/student/', '/api/v1/')
         body = route.request.post_data_json if route.request.method in ('POST','PUT') else None
         data = {}
         if path == '/api/auth/refresh': data = {'access_token': token, 'user': USER}
         elif path == '/api/v1/sessions/my-sessions': data = [session]
+        elif path == '/api/v1/enrollments/my-enrollments': data = []
+        elif path == '/api/v1/attendance/resolve':
+            assert body['code'] == 'ABCD2345'
+            data = {'session_id': session['id'], 'qr_code': 'ABCD2345'}
+        elif path == '/api/v1/sessions/session-browser': data = session
         elif path == '/api/v1/checkins/my-checkins':
             data = [] if not state['submissions'] else [{'id':'record-browser', 'session_name':session['name'], 'course_code':'REAL101', 'status':status, 'checked_in_at':now.isoformat()}]
         elif path == '/api/v1/users/me':
@@ -64,6 +70,9 @@ def setup_page(browser, status='approved', camera_denied=False, location_denied=
         elif path == '/api/v1/devices/register':
             state['public_key'] = body['public_key']
             data = {'id':'device-browser'}
+        elif path == '/api/v1/users/me/face/readiness':
+            assert state['consent']['camera_consent']
+            data = state['readiness']
         elif path == '/api/v1/users/me/face/enroll':
             assert state['consent'] == {'camera_consent': True, 'geolocation_consent': True}
             assert base64.b64decode(body['image']).startswith(b'\xff\xd8')
@@ -84,8 +93,10 @@ def setup_page(browser, status='approved', camera_denied=False, location_denied=
     page.route('**/api/**', handler)
     page.goto(URL)
     expect(page.get_by_role('heading', name='Join a class')).to_be_visible()
-    page.get_by_label('Session', exact=True).select_option('session-browser')
-    page.get_by_role('button', name='Continue to verification').click()
+    expect(page.get_by_label('Session', exact=True)).to_have_count(0)
+    expect(page.get_by_label('Session verification code', exact=True)).to_have_count(0)
+    page.get_by_label('Attendance passcode', exact=True).fill('ABCD2345')
+    page.get_by_role('button', name='Join with passcode').click()
     return context, page, state
 
 
@@ -97,7 +108,7 @@ def consent_and_enroll(page):
     page.get_by_role('checkbox').nth(1).check()
     button.click()
     expect(page.get_by_role('heading', name='Enroll your face')).to_be_visible()
-    page.get_by_role('button', name='Capture enrollment photo').click()
+    page.get_by_role('button', name='Check camera & capture photo').click()
 
 
 @pytest.mark.parametrize('status,title', [('approved','Attendance approved'), ('flagged','Check-in needs review'), ('rejected','Check-in rejected')])
@@ -105,7 +116,7 @@ def test_live_capture_submission_and_actual_status(browser, status, title):
     context, page, state = setup_page(browser, status)
     try:
         consent_and_enroll(page)
-        page.get_by_role('button', name='Start liveness challenge').click()
+        page.get_by_role('button', name='Check camera & start challenge').click()
         expect(page.get_by_role('heading', name=title)).to_be_visible(timeout=20000)
         assert len(state['submissions']) == 1
         body = state['submissions'][0]
@@ -150,7 +161,7 @@ def test_cancel_stops_camera(browser):
         page.get_by_role('checkbox').nth(0).check()
         page.get_by_role('checkbox').nth(1).check()
         page.get_by_role('button', name='I agree — continue').click()
-        expect(page.get_by_role('button', name='Capture enrollment photo')).to_be_enabled()
+        expect(page.get_by_role('button', name='Check camera & capture photo')).to_be_enabled()
         page.get_by_role('button', name='Cancel verification').click()
         expect(page.get_by_role('heading', name='Join a class')).to_be_visible()
         assert page.evaluate('window.testStreams.every(s => s.getTracks().every(t => t.readyState === "ended"))')
@@ -158,11 +169,40 @@ def test_cancel_stops_camera(browser):
     finally: context.close()
 
 
+def test_camera_preparation_failure_can_retry_without_restarting(browser):
+    context, page, state = setup_page(browser)
+    try:
+        state['readiness'] = {'ready': False, 'message': 'Move closer and face the camera.', 'warnings': []}
+        consent_and_enroll(page)
+        expect(page.get_by_role('alert').filter(has_text='Move closer')).to_be_visible()
+        assert not state['enrolled'] and not state['submissions']
+        assert page.evaluate('window.testStreams.some(s => s.getVideoTracks().some(t => t.readyState === "live"))')
+        state['readiness'] = {'ready': True, 'message': 'Ready', 'warnings': []}
+        page.get_by_role('button', name='Check camera & capture photo').click()
+        expect(page.get_by_role('heading', name='Liveness challenge')).to_be_visible(timeout=10000)
+        assert state['enrolled']
+    finally: context.close()
+
+
+def test_cancel_during_countdown_does_not_submit(browser):
+    context, page, state = setup_page(browser)
+    try:
+        consent_and_enroll(page)
+        page.get_by_role('button', name='Check camera & start challenge').click()
+        expect(page.get_by_text('Get ready — start with a neutral face', exact=True)).to_be_visible()
+        page.get_by_role('button', name='Cancel verification').click()
+        expect(page.get_by_role('heading', name='Join a class')).to_be_visible()
+        page.wait_for_timeout(13000)
+        assert not state['submissions']
+        assert page.evaluate('window.testStreams.every(s => s.getTracks().every(t => t.readyState === "ended"))')
+    finally: context.close()
+
+
 def test_network_failure_does_not_report_success(browser):
     context, page, state = setup_page(browser, fail_submission=True)
     try:
         consent_and_enroll(page)
-        page.get_by_role('button', name='Start liveness challenge').click()
+        page.get_by_role('button', name='Check camera & start challenge').click()
         expect(page.get_by_role('heading', name='Check-in could not be completed')).to_be_visible(timeout=20000)
         expect(page.get_by_text('Cannot reach the server.', exact=False)).to_be_visible()
         assert not state['submissions']

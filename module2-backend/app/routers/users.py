@@ -3,7 +3,7 @@ import html
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, StrictBool, field_validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 import enum
@@ -16,6 +16,8 @@ from ..course_access import staff_course_ids
 from ..services.face_client import FaceServiceError, enroll_face as enroll_face_with_service
 from ..audit import add_audit_log
 from ..roster import link_matriculation, normalize_matriculation
+from ..services.face_client import check_camera_readiness
+from ..rate_limit import enforce_rate_limit
 
 # --- SQLAlchemy Model ---
 class UserRole(str, enum.Enum):
@@ -49,6 +51,16 @@ class AdminUpdateUserBody(BaseModel):
 # Request schema for POST /users/me/face/enroll
 class FaceEnrollBody(BaseModel):
     image: str = Field(..., description="Base64-encoded face image (PNG/JPEG), without data URL prefix")
+
+
+class CameraReadinessBody(BaseModel):
+    image: str = Field(..., min_length=1, max_length=2_000_000)
+
+
+class CameraReadinessResponse(BaseModel):
+    ready: StrictBool
+    message: str
+    warnings: List[str] = Field(default_factory=list)
 
 # Response schema for POST /users/me/face/enroll
 class FaceEnrollResponse(BaseModel):
@@ -188,6 +200,26 @@ def update_me(
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/me/face/readiness", response_model=CameraReadinessResponse)
+async def camera_readiness(
+    body: CameraReadinessBody,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == current_user.get("id")).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if not user.camera_consent:
+        raise HTTPException(400, "Camera consent not given")
+    enforce_rate_limit(f"camera-readiness:{user.id}", limit=20, window=60)
+    try:
+        return CameraReadinessResponse(**await check_camera_readiness(body.image))
+    except FaceServiceError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(503, "Camera readiness service returned an invalid response") from exc
 
 
 # POST /users/me/face/enroll

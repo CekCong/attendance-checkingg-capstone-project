@@ -26,6 +26,10 @@ async function send(method, path, authenticated = true, body) {
   return exportsObject[method](request, { params: Promise.resolve({ path: segments }) });
 }
 (async () => {
+  assert.equal((await send('POST', 'users/me/face/readiness', true, { image: 'frame' })).status, 200);
+  assert.equal(calls.at(-1).url, 'http://backend:8000/api/v1/users/me/face/readiness');
+  assert.equal((await send('POST', 'users/me/face/readiness', false, { image: 'frame' })).status, 401);
+  assert.equal((await send('POST', 'users/me/face/arbitrary', true, { image: 'frame' })).status, 404);
   assert.equal((await send('POST', 'attendance/resolve', true, { code: 'ABCD2345' })).status, 200);
   assert.equal(calls.at(-1).url, 'http://backend:8000/api/v1/attendance/resolve');
   assert.equal(calls.at(-1).options.headers.Authorization, 'Bearer test-token');

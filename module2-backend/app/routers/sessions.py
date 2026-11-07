@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, computed_field
 from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, Enum as SQLEnum, ForeignKey, create_engine, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship, joinedload
 import enum
@@ -16,6 +16,7 @@ from app.models import CourseModel as Course, SessionModel, EnrollmentModel as C
 from app.database import get_db
 from app.course_access import require_course_staff_access, staff_course_ids
 from app.audit import add_audit_log
+from app.runtime_security import biometric_demo_enabled
 
 # --- Database & Base Setup ---
 load_dotenv()
@@ -147,6 +148,11 @@ class SessionResponse(BaseModel):
     risk_threshold: Optional[float] = None
     qr_code_enabled: bool = False
     created_at: datetime
+
+    @computed_field
+    @property
+    def biometric_demo_mode(self) -> bool:
+        return biometric_demo_enabled()
 
     class Config:
         from_attributes = True

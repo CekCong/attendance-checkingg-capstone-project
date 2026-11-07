@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright, expect
 
 URL = os.getenv('TEST_FRONTEND_URL', 'http://localhost:3000')
 SESSION = '77777777-7777-4777-8777-777777777777'
-CODE = 'a-real-session-code-0123456789'
+CODE = 'QRAB2345'
 
 
 def qr_image(value):
@@ -25,20 +25,28 @@ def qr_image(value):
 @pytest.fixture
 def scanner_page():
     with sync_playwright() as p:
-        browser = p.chromium.launch(executable_path='/usr/bin/chromium', args=['--no-sandbox'])
+        browser = p.chromium.launch(executable_path=os.getenv('CHROMIUM_PATH', '/usr/bin/chromium'), args=['--no-sandbox'])
         context = browser.new_context(viewport={'width':390,'height':844})
         page = context.new_page()
         payload = base64.urlsafe_b64encode(json.dumps({'exp':int(time.time())+3600}).encode()).decode().rstrip('=')
         now = datetime.now(timezone.utc)
         calls = []
+        session = {'id':SESSION, 'name':'QR Class','course_id':'course', 'status':'active', 'qr_code_enabled':True,
+                   'checkin_opens_at':(now-timedelta(minutes=5)).isoformat(),'checkin_closes_at':(now+timedelta(hours=1)).isoformat()}
         def handler(route):
-            path = urlparse(route.request.url).path; calls.append(path)
+            path = urlparse(route.request.url).path.replace('/api/student/', '/api/v1/'); calls.append(path)
             if path == '/api/auth/refresh':
                 data = {'access_token':f'test.{payload}.signature', 'user':{'id':'student','email':'s@example.com','full_name':'Student','role':'student'}}
             elif path == '/api/v1/sessions/my-sessions':
-                data = [{'id':SESSION, 'name':'QR Class','course_id':'course', 'status':'active', 'qr_code_enabled':True,
-                         'checkin_opens_at':(now-timedelta(minutes=5)).isoformat(),'checkin_closes_at':(now+timedelta(hours=1)).isoformat()}]
+                data = [session]
             elif path == '/api/v1/checkins/my-checkins': data = []
+            elif path == '/api/v1/enrollments/my-enrollments': data = []
+            elif path == '/api/v1/attendance/resolve':
+                if route.request.post_data_json['code'].replace(' ', '').replace('-', '').upper() != CODE:
+                    route.fulfill(status=400, json={'detail':'This attendance code is invalid, expired, or closed.'})
+                    return
+                data = {'session_id':SESSION, 'qr_code':CODE}
+            elif path == f'/api/v1/sessions/{SESSION}': data = session
             else: raise AssertionError(path)
             route.fulfill(json=data,headers={'Access-Control-Allow-Origin':'*'})
         page.route('**/api/**',handler)
@@ -62,61 +70,73 @@ def scanner_page():
           };
         ''')
         page.goto(URL)
-        page.get_by_label('Session',exact=True).select_option(SESSION)
+        expect(page.get_by_role('heading', name='Join a class')).to_be_visible()
         yield page, calls
         context.close(); browser.close()
 
 
-@pytest.mark.parametrize('structured', [False, True])
-def test_real_qr_pixels_fill_code_stop_camera_and_preserve_consent(scanner_page, structured):
+@pytest.mark.parametrize('format', ['raw', 'structured', 'url'])
+def test_real_qr_pixels_resolve_lesson_stop_camera_and_preserve_consent(scanner_page, format):
     page,calls = scanner_page
-    value = json.dumps({'v':1,'session_id':SESSION,'code':CODE}) if structured else CODE
+    value = (json.dumps({'v':1,'session_id':SESSION,'code':CODE}) if format == 'structured'
+             else f'https://students.example.edu/#attendance={CODE}' if format == 'url' else CODE)
     page.evaluate('(src) => window.qrSource = src',qr_image(value))
-    page.get_by_role('button', name='Scan session QR code').click()
-    expect(page.get_by_label('Session verification code',exact=True)).to_have_value(CODE)
+    page.get_by_role('button', name='Scan QR code', exact=True).click()
+    expect(page.get_by_role('heading', name='Privacy consent')).to_be_visible()
     page.wait_for_function('window.qrStreams.length === 1 && window.qrStreams.every(s => s.getTracks().every(t => t.readyState === "ended"))')
     assert '/api/v1/checkins/' not in calls
     assert 'data:image' not in page.evaluate('JSON.stringify({...localStorage, ...sessionStorage})')
     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
-    page.get_by_role('button',name='Continue to verification').click()
+    assert '/api/v1/attendance/resolve' in calls
     expect(page.get_by_role('button', name='I agree — continue')).to_be_disabled()
 
 
 @pytest.mark.parametrize('value,message', [
     ('https://untrusted.example/attendance?token=secret', 'This is not a session verification code.'),
-    (json.dumps({'v':1,'session_id':'other','code':CODE}), 'This QR code is for a different session.')])
-def test_wrong_session_or_url_is_rejected_without_navigation(scanner_page, value, message):
+    (json.dumps({'v':2,'session_id':SESSION,'code':CODE}), 'This is not a session verification code.')])
+def test_invalid_qr_is_rejected_without_navigation(scanner_page, value, message):
     page,calls = scanner_page
     page.evaluate('(src) => window.qrSource = src',qr_image(value))
-    page.get_by_role('button',name='Scan session QR code').click()
+    page.get_by_role('button',name='Scan QR code',exact=True).click()
     expect(page.get_by_role('status')).to_contain_text(message)
-    expect(page.get_by_label('Session verification code',exact=True)).to_have_value('')
+    expect(page.get_by_label('Attendance passcode',exact=True)).to_have_value('')
     assert page.url.startswith(URL)
     page.get_by_role('button',name='Close scanner').click()
     page.wait_for_function('window.qrStreams.every(s => s.getTracks().every(t => t.readyState === "ended"))')
-    page.get_by_label('Session verification code',exact=True).fill(CODE)
-    expect(page.get_by_role('button',name='Continue to verification')).to_be_enabled()
+    page.get_by_label('Attendance passcode',exact=True).fill(CODE)
+    expect(page.get_by_role('button',name='Join with passcode')).to_be_enabled()
 
 
 def test_permission_denial_keeps_manual_entry_available(scanner_page):
     page,_ = scanner_page
     page.evaluate("() => { navigator.mediaDevices.getUserMedia = async () => { throw new DOMException('Denied', 'NotAllowedError'); }; }")
-    page.get_by_role('button',name='Scan session QR code').click()
+    page.get_by_role('button',name='Scan QR code',exact=True).click()
     expect(page.get_by_role('status')).to_contain_text('permission denied')
     page.get_by_role('button',name='Close scanner').click()
-    page.get_by_label('Session verification code',exact=True).fill(CODE)
-    expect(page.get_by_role('button',name='Continue to verification')).to_be_enabled()
+    page.get_by_label('Attendance passcode',exact=True).fill(CODE)
+    expect(page.get_by_role('button',name='Join with passcode')).to_be_enabled()
 
 
 def test_cancel_before_permission_resolves_releases_late_stream(scanner_page):
     page,_ = scanner_page
     page.evaluate('window.delayQrPermission = true')
-    page.get_by_role('button',name='Scan session QR code').click()
+    page.get_by_role('button',name='Scan QR code',exact=True).click()
     page.wait_for_function('typeof window.resolveQrPermission === "function"')
     page.get_by_role('button',name='Close scanner').click()
     page.evaluate('window.resolveQrPermission()')
     page.wait_for_function('window.qrStreams.every(s => s.getTracks().every(t => t.readyState === "ended"))')
-    expect(page.get_by_label('Session verification code',exact=True)).to_have_value('')
+    expect(page.get_by_label('Attendance passcode',exact=True)).to_have_value('')
+
+
+def test_expired_scanned_code_shows_error_and_allows_manual_retry(scanner_page):
+    page, calls = scanner_page
+    page.evaluate('(src) => window.qrSource = src', qr_image('EXPIRED1'))
+    page.get_by_role('button', name='Scan QR code', exact=True).click()
+    expect(page.get_by_role('alert')).to_contain_text('invalid, expired, or closed')
+    expect(page.get_by_role('heading', name='Privacy consent')).to_have_count(0)
+    page.get_by_label('Attendance passcode', exact=True).fill('qrab 2345')
+    page.get_by_role('button', name='Join with passcode').click()
+    expect(page.get_by_role('heading', name='Privacy consent')).to_be_visible()
 
 
 def test_instructor_issues_decodable_qr_and_hides_expired_code():

@@ -74,6 +74,10 @@ async def enroll_face(
     )
 
 
+async def check_camera_readiness(image: str) -> Dict[str, Any]:
+    return await _post("/face/readiness", {"image": image}, timeout=10.0)
+
+
 async def check_liveness(
     image: str | list[str],
     challenge_type: str = "passive",

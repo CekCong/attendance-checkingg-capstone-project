@@ -7,6 +7,7 @@ import {
   type StudentSession,
   type StudentProfile,
   type LivenessTicket,
+  serverTime,
 } from "@/lib/studentApi";
 import { prepareDevice, signDevice } from "@/lib/deviceIdentity";
 import type {
@@ -50,11 +51,35 @@ export function CheckInWorkflow() {
     operation.current += 1;
     setStep("IDLE");
     setSession(null);
+    setQrCode("");
     setCoordinates(null);
     setResult(null);
     setError(null);
     setConsent({ camera: false, geolocation: false });
     device.current = null;
+  }
+  async function retry() {
+    if (!session || !accessToken || busy.current) return;
+    busy.current = true;
+    const current = ++operation.current;
+    setResult(null);
+    setError(null);
+    setCoordinates(null);
+    device.current = null;
+    setStep("PREPARING");
+    try {
+      const latest = await studentRequest<StudentSession>(`/sessions/${session.id}`, accessToken);
+      if (current !== operation.current) return;
+      if (latest.status !== "active" || serverTime(latest.checkin_opens_at) > Date.now() || serverTime(latest.checkin_closes_at) < Date.now()) {
+        throw new Error("Attendance is closed for this lesson. Ask your instructor to reopen it before retrying.");
+      }
+      setSession(latest);
+      setStep("CONSENT");
+    } catch (e) {
+      if (current === operation.current) fail(e instanceof Error ? e.message : "Unable to prepare a retry.");
+    } finally {
+      busy.current = false;
+    }
   }
   async function begin() {
     if (
@@ -82,7 +107,7 @@ export function CheckInWorkflow() {
       );
       device.current = await prepareDevice(user.id, accessToken);
       if (current === operation.current)
-        setStep(profile.face_enrolled ? "GEOLOCATION" : "ENROLLMENT");
+        setStep(profile.face_enrolled || session?.biometric_demo_mode ? "GEOLOCATION" : "ENROLLMENT");
     } catch (e) {
       if (current === operation.current)
         fail(
@@ -156,8 +181,11 @@ export function CheckInWorkflow() {
       </p>
     );
   return (
-    <div className="flex w-full max-w-lg flex-col items-center gap-4 px-4 py-6">
+    <div className={`flex w-full flex-col items-center gap-4 px-4 py-6 ${step === "IDLE" ? "max-w-6xl sm:px-6" : "max-w-lg"}`}>
       <StepIndicator step={step} />
+      {session?.biometric_demo_mode && <p role="status" className="w-full rounded-xl border border-amber-300/50 bg-amber-300/10 p-3 text-sm">
+        Demo mode: face and liveness results are simulated as passing. Location, enrollment, session code, and device checks still apply.
+      </p>}
       {step === "IDLE" && (
         <StudentDashboard
           token={accessToken}
@@ -202,6 +230,7 @@ export function CheckInWorkflow() {
           result={result}
           errorMessage={error}
           onReset={reset}
+          onRetry={session && result?.status === "rejected" ? () => void retry() : undefined}
         />
       )}
       {["ENROLLMENT", "GEOLOCATION", "LIVENESS_CHALLENGE"].includes(step) && (

@@ -15,6 +15,7 @@ from app.database import get_db
 from app.models import EnrollmentModel, SessionModel
 from app.rate_limit import check_rate_limit
 from app.security import require_roles
+from app.runtime_security import biometric_demo_enabled
 
 router = APIRouter(tags=["Attendance invitations"])
 
@@ -57,10 +58,12 @@ def invitation(lesson, website):
             reason = "expired"
         else:
             reason = "not_open"
-        return {"open": False, "session_id": lesson.id, "reason": reason, "demo_mode": demo}
+        return {"open": False, "session_id": lesson.id, "reason": reason, "demo_mode": demo,
+                "biometric_demo_mode": biometric_demo_enabled()}
     url = student_origin(website) + "/#attendance=" + lesson.qr_code_secret
     image = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, border=4)
     return {"open": True, "session_id": lesson.id, "passcode": lesson.qr_code_secret, "demo_mode": demo,
+            "biometric_demo_mode": biometric_demo_enabled(),
             "expires_at": lesson.qr_code_expires_at.replace(tzinfo=timezone.utc),
             "join_url": url, "qr_svg": image.to_string(encoding="unicode")}
 

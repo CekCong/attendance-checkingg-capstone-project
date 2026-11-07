@@ -212,12 +212,49 @@ only works on the same computer. Camera and location access require HTTPS on
 other devices. The student portal proxies attendance requests to `BACKEND_INTERNAL_URL`,
 so phones do not need direct access to backend port 8000.
 
-Students scan with their phone's Camera app or type the passcode in the student
-portal, sign in, confirm sensor consent, enroll their face if needed, allow location
+Students scan with their phone's Camera app, use **Scan QR code** in the student
+portal, or type the attendance passcode. The code identifies the lesson automatically;
+students do not select a session or enter a second code. They sign in, confirm
+sensor consent, enroll their face if needed, allow location
 access, and complete the active liveness challenge. Device attestation and server
 verification remain enabled. The backend records the check-in and reports approved, flagged for review,
 or rejected. Students must already be enrolled in the course; a code does not
 bypass enrollment or verification. Face-matching courses still require face enrollment.
+
+Rejected students can choose **Retry attendance** on the result screen or in
+**Attendance history** while the lesson's check-in window is open. Each retry
+requires fresh location, liveness, and device verification and a valid current
+attendance code. Approved, pending, flagged, and appealed records cannot be
+resubmitted. Retries update the same attendance entry so reports count the student
+once; previous outcomes remain in the audit log. Rejection explanations appear
+on the result screen and in history. New liveness failures include a specific
+reason when the verification service supplies one; older records may only have
+a general liveness-failure explanation.
+
+Before enrollment and each liveness recording, **Check camera & start challenge**
+sends one temporary image to check face visibility, framing and facial landmarks.
+No template or attendance record is created by this preparation check. Lighting
+tips are advisory when the face can already be read. A three-second countdown
+precedes three guided phases (neutral, gesture, neutral), with reaction time before
+each set of five frames. Close your eyes for two seconds and reopen them for the
+blink challenge; hold the slight head turn or smile until the return-to-neutral
+prompt. Preparation failures can be retried on the camera
+screen; cancelled, interrupted or expired recordings are not submitted. Real face
+matching and liveness thresholds are unchanged.
+
+For a local presentation, an independent **biometric demo mode** can simulate
+passing face and liveness results. It is off by default and prohibited in
+`SAIV_ENV=production`. It skips face enrollment for the demo workflow without
+writing a fake face template. The portals and saved student records label the
+bypass; course enrollment, attendance codes, location and device checks still apply.
+Existing attendance records are not changed when the mode is enabled.
+
+```bash
+# Enable for the currently running local demo
+BIOMETRIC_DEMO_MODE=true docker compose up -d --no-deps backend
+# Restore real biometric verification afterwards
+BIOMETRIC_DEMO_MODE=false docker compose up -d --no-deps backend
+```
 
 QR images are generated locally by the backend. Student URLs can be changed
 without rotating a currently active passcode. No external QR service is used.
