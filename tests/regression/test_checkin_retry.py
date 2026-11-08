@@ -159,14 +159,26 @@ def test_retry_preserves_session_and_enrollment_rules(retry_app, restriction, ex
 def test_retry_requires_fresh_device_and_liveness_proofs(retry_app):
     _, db, _, _, result, fresh, submit = retry_app
     body = fresh()
-    assert submit(body).status_code == 201
+    first = submit(body)
+    assert first.status_code == 201
+    original = first.json()
+    audit_count = db.query(AuditLogModel).count()
     result.update(liveness_passed=True, liveness_score=0.99)
-    assert submit(body).status_code == 409  # consumed device nonce
+    duplicate = submit(body)
+    assert duplicate.status_code == 400  # Duplicate retry uses a consumed device nonce.
+    assert 'Already checked in' in duplicate.json()['detail']
+    assert 'fresh verification' in duplicate.json()['detail']
+    record = db.query(CheckinModel).one()
+    assert record.id == original['id'] and record.status == 'rejected'
+    assert record.checked_in_at.isoformat() == original['checked_in_at']
+    assert db.query(AuditLogModel).count() == audit_count
     new_body = fresh()
     new_body['liveness_challenge_id'] = body['liveness_challenge_id']
     assert submit(new_body).status_code == 409
     assert db.query(CheckinModel).one().status == 'rejected'
-    assert submit().json()['status'] == 'approved'
+    retried = submit().json()
+    assert retried['status'] == 'approved' and retried['id'] == original['id']
+    assert db.query(CheckinModel).count() == 1
 
 
 def test_service_failure_does_not_erase_previous_rejection(retry_app, monkeypatch):

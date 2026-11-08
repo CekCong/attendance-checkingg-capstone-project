@@ -8,7 +8,7 @@ from sqlalchemy import text
 from test_stage6_auth_qr import qr_session
 from test_security_privacy_migration import attendance, headers
 from test_auth_migration import auth_app
-from app.models import CourseInstructorModel, CourseModel, SessionModel, SessionOccurrenceModel, SessionSeriesModel, CheckinModel, EnrollmentModel
+from app.models import CourseInstructorModel, CourseModel, SessionModel, SessionOccurrenceModel, SessionSeriesModel, CheckinModel, EnrollmentModel, UserModel
 from app.routers import attendance_codes, courses, recurring_sessions
 
 
@@ -51,8 +51,11 @@ def test_demo_invitation_accepts_verified_attendance_at_any_time(calendar_app, m
 
 def test_recurrence_deletion_preserves_other_dates_and_course_ownership(calendar_app):
     http, db, student, original, _, teacher, outsider = calendar_app
-    course = http.post("/api/v1/courses/", headers=headers(teacher), json={
+    admin = UserModel(id=str(uuid.uuid4()), email="calendar-admin@example.com", full_name="Admin", role="admin", hashed_password="unused")
+    db.add(admin); db.commit()
+    course = http.post("/api/v1/courses/", headers=headers(admin), json={
         "code": "MERGE-" + uuid.uuid4().hex[:8], "name": "Merged course", "semester": "2026/27 Semester 1",
+        "instructor_id": teacher.id,
     })
     assert course.status_code == 201, course.text
     course_id = course.json()["id"]

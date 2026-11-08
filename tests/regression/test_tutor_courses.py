@@ -15,7 +15,7 @@ class TutorCourseTests(unittest.TestCase):
         headers = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        request = Request("http://localhost:8000/api/v1" + path, method=method,
+        request = Request(os.getenv("TEST_BACKEND_URL", "http://localhost:8000") + "/api/v1" + path, method=method,
                           data=json.dumps(body).encode() if body is not None else None,
                           headers=headers)
         try:
@@ -40,10 +40,12 @@ class TutorCourseTests(unittest.TestCase):
     def payload(self):
         return {"code": "TEST-" + uuid.uuid4().hex[:10], "name": "Test Course", "semester": "2026-S1"}
 
-    def test_owner_can_create_list_select_and_schedule(self):
+    def test_owner_can_add_existing_course_list_select_and_schedule(self):
         owner_id, token = self.users["owner"]
-        status, course = self.request("POST", "/courses/", self.payload(), token)
+        status, course = self.request("POST", "/courses/", self.payload(), self.users["admin"][1])
         self.assertEqual(status, 201, course)
+        status, course = self.request("POST", f"/courses/{course['id']}/assignment", token=token)
+        self.assertEqual(status, 200, course)
         self.assertEqual(course["instructor_id"], owner_id)
         status, courses = self.request("GET", "/courses/", token=token)
         self.assertEqual(status, 200, courses)
@@ -76,13 +78,13 @@ class TutorCourseTests(unittest.TestCase):
         status, _ = self.request("POST", "/courses/", {**self.payload(), "instructor_id": self.users["other"][0]}, self.users["owner"][1])
         self.assertEqual(status, 403)
 
-    def test_student_and_anonymous_cannot_create(self):
-        for token in (self.users["student"][1], None):
+    def test_instructor_student_and_anonymous_cannot_create(self):
+        for token in (self.users["owner"][1], self.users["student"][1], None):
             status, _ = self.request("POST", "/courses/", self.payload(), token)
             self.assertIn(status, (401, 403))
 
     def test_duplicate_and_blank_fields(self):
-        token = self.users["owner"][1]
+        token = self.users["admin"][1]
         payload = self.payload()
         status, data = self.request("POST", "/courses/", payload, token)
         self.assertEqual(status, 201, data)

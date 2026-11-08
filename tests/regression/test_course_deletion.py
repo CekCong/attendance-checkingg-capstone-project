@@ -28,7 +28,7 @@ class CourseDeletionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.people = {}
-        for label, role in (("owner", "instructor"), ("other", "instructor"), ("student", "student")):
+        for label, role in (("admin", "admin"), ("owner", "instructor"), ("other", "instructor"), ("student", "student")):
             body = {"email": f"delete-test-{uuid.uuid4().hex}@example.com", "password": "Local-delete-test-123",
                     "full_name": "Deletion Test", "role": role}
             status, user = cls.request("POST", "/auth/register", body)
@@ -42,8 +42,8 @@ class CourseDeletionTests(unittest.TestCase):
         self.courses = []
         for _ in range(2):
             status, course = self.request("POST", "/courses/", {
-                "code": "DEL-" + uuid.uuid4().hex[:10], "name": "Deletion Test", "semester": "2026/27 Semester 1",
-            }, self.token)
+                "instructor_id": self.people["owner"][0], "code": "DEL-" + uuid.uuid4().hex[:10], "name": "Deletion Test", "semester": "2026/27 Semester 1",
+            }, self.people["admin"][1])
             self.assertEqual(status, 201, course)
             self.courses.append(course)
         self.course, self.other_course = self.courses

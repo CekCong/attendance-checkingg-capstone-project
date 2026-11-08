@@ -34,10 +34,13 @@ class RecurringLessonTests(unittest.TestCase):
 
     def setUp(self):
         self.token = self.account("instructor")
+        admin_token = self.account("admin")
         status, self.course = self.request("POST", "/courses/", {
             "code": f"CAL-{uuid.uuid4().hex[:10]}", "name": "Calendar tests", "semester": "2026/27 Semester 1",
-        }, self.token)
+        }, admin_token)
         self.assertEqual(status, 201, self.course)
+        status, assigned = self.request("POST", f"/courses/{self.course['id']}/assignment", token=self.token)
+        self.assertEqual(status, 200, assigned)
         self.start = (datetime.now(timezone.utc) + timedelta(days=14)).date()
         self.start += timedelta(days=(0 - self.start.weekday()) % 7)
         self.payload = {"request_id": str(uuid.uuid4()), "course_id": self.course["id"], "name": "Weekly tutorial",

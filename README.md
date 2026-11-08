@@ -116,16 +116,19 @@ authentication and student API requests. Tutor API requests use `NEXT_PUBLIC_API
 
 ### Tutor courses
 
-Sign in to http://localhost:8501, then choose **New course** under **Your courses**.
-Enter a unique course code and name, choose an academic year/semester from the
-dropdown, and select **Create course**.
-The course is saved, assigned to your tutor account, and automatically selected
-for session creation. Use the course dropdown to switch between your courses.
+Administrators create courses in the catalog. Sign in to http://localhost:8501,
+then choose **Add existing course** under **Your courses**. Select an available
+course and choose **Add to my courses**. This assigns the existing course to your
+tutor account and selects it for scheduling; it does not create another course.
+Only active, unassigned courses are available, including checks for assignments
+through existing lessons. Ask an administrator if none are available. Instructors
+cannot create catalog entries through the UI or API. Use the course dropdown to
+switch between your courses.
 In **Lesson calendar**, select **Add lesson**. Choose a lesson title, type, and
 optional location. Select **Every week** to choose a weekday, inclusive start/end
 dates, and start/end times, or **Does not repeat** for a single lesson. Check the
 lesson-count/date preview, then save. All scheduling and calendar times use
-Singapore time (SGT); semester options do not assume official term dates or holidays.
+Singapore time (SGT).
 
 Use **Today**, the previous/next arrows, and **Day / Week / Month** to navigate the calendar.
 On laptops the calendar sits on the left and attendance tools, flagged check-ins,

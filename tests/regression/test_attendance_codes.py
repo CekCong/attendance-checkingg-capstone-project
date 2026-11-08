@@ -31,7 +31,7 @@ class AttendanceCodeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.people = {}
-        for label, role in (("owner", "instructor"), ("other", "instructor"), ("student", "student"), ("outsider", "student")):
+        for label, role in (("admin", "admin"), ("owner", "instructor"), ("other", "instructor"), ("student", "student"), ("outsider", "student")):
             body = {"email": f"qr-test-{uuid.uuid4().hex}@example.com", "password": "Local-qr-test-123", "full_name": "QR Test", "role": role}
             status, user = cls.request("POST", "/auth/register", body)
             assert status == 201, user
@@ -41,7 +41,7 @@ class AttendanceCodeTests(unittest.TestCase):
 
     def setUp(self):
         self.token = self.people["owner"][1]
-        status, self.course = self.request("POST", "/courses/", {"code": "QR-" + uuid.uuid4().hex[:10], "name": "QR Test", "semester": "2026/27 Semester 1"}, self.token)
+        status, self.course = self.request("POST", "/courses/", {"instructor_id": self.people["owner"][0], "code": "QR-" + uuid.uuid4().hex[:10], "name": "QR Test", "semester": "2026/27 Semester 1"}, self.people["admin"][1])
         self.assertEqual(status, 201, self.course)
         now = datetime.now(timezone.utc)
         status, self.lesson = self.request("POST", "/sessions/", {"course_id": self.course["id"], "name": "Attendance test", "scheduled_start": (now + timedelta(minutes=1)).isoformat(), "scheduled_end": (now + timedelta(hours=1)).isoformat(), "require_liveness_check": False}, self.token)

@@ -18,9 +18,10 @@ def roster_app(auth_app):
         http.app.include_router(router, prefix="/api/v1")
     teacher = UserModel(id=str(uuid.uuid4()), email="roster-teacher@example.com", full_name="Teacher", role="instructor", hashed_password="unused")
     outsider = UserModel(id=str(uuid.uuid4()), email="roster-other@example.com", full_name="Other", role="instructor", hashed_password="unused")
+    admin = UserModel(id=str(uuid.uuid4()), email="roster-admin@example.com", full_name="Admin", role="admin", hashed_password="unused")
     student.matriculation_number = "U000001A"
-    db.add_all([teacher, outsider]); db.commit()
-    created = http.post("/api/v1/courses/", headers=headers(teacher), json={"code": "CSV101", "name": "CSV Course", "semester": "2026/27 Semester 1"})
+    db.add_all([teacher, outsider, admin]); db.commit()
+    created = http.post("/api/v1/courses/", headers=headers(admin), json={"code": "CSV101", "name": "CSV Course", "semester": "2026/27 Semester 1", "instructor_id": teacher.id})
     assert created.status_code == 201, created.text
     return http, db, student, teacher, outsider, created.json()["id"]
 
