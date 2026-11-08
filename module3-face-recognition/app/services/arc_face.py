@@ -6,6 +6,7 @@ Return numpy array that can be hashed using SimHash.
 
 from functools import lru_cache
 import os
+from threading import Lock
 import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
@@ -15,6 +16,7 @@ ARCFACE_MODEL_ROOT = os.getenv("INSIGHTFACE_HOME", "~/.insightface")
 ARCFACE_PROVIDERS = ["CPUExecutionProvider"]
 ARCFACE_DETECTION_SIZE = (640, 640)  
 ARCFACE_CONTEXT_ID = -1   #GPU context ID, -1 for CPU
+ARCFACE_LOCK = Lock()
 
 
 """Get the ArcFace model instance with caching to avoid reloading the model multiple times."""
@@ -33,7 +35,8 @@ def extract_face_embedding(image_array, _detection):
     arcface_model = get_arcface_model()
 
     image_bgr = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR) #Convert RGB image to BGR for OpenCV processing
-    faces = arcface_model.get(image_bgr)
+    with ARCFACE_LOCK:
+        faces = arcface_model.get(image_bgr)
 
     if not faces:
         return None

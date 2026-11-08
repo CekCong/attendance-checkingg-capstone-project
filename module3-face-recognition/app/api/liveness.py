@@ -63,7 +63,7 @@ router = APIRouter(tags=["Liveness"])
 
 
 @router.post("/liveness/challenge", response_model=LivenessChallengeResponse)
-async def issue_liveness_challenge(request: LivenessChallengeRequest):
+def issue_liveness_challenge(request: LivenessChallengeRequest):
     try:
         challenge_id, challenge_type = create_liveness_challenge(
             request.user_id,
@@ -79,7 +79,7 @@ async def issue_liveness_challenge(request: LivenessChallengeRequest):
     )
 
 @router.post("/liveness/check", response_model=LivenessResponse)
-async def check_liveness(request: LivenessRequest):
+def check_liveness(request: LivenessRequest):
     active_challenge = request.challenge_type in {"blink", "head_turn", "smile"}
     if active_challenge and not request.challenge_id:
         raise HTTPException(status_code=400, detail="Active liveness requires a challenge ID.")

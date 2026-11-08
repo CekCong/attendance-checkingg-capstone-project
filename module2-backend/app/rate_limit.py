@@ -85,7 +85,11 @@ def check_rate_limit(key: str, limit: int, window: int) -> Tuple[bool, int]:
 
 
 def client_ip(request) -> str:
-    # Forwarded headers must be validated by a trusted ingress/ASGI server.
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        forwarded_ip = forwarded_for.split(",", 1)[0].strip()
+        if forwarded_ip:
+            return forwarded_ip
     return request.client.host if request.client else "unknown"
 
 

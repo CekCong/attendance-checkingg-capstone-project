@@ -1,5 +1,6 @@
 from sqlalchemy import or_
 import uuid
+import secrets
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
@@ -11,6 +12,7 @@ from ..security import get_current_user
 from ..course_access import require_course_staff_access
 from ..database import get_db as shared_get_db
 from ..audit import add_audit_log
+from ..store import hash_password
 import os
 from dotenv import load_dotenv
 
@@ -64,6 +66,7 @@ class BulkEnrollmentRequest(BaseModel):
 class BulkEnrollmentDetail(BaseModel):
     email: str
     status: str  # e.g., "enrolled", "already_enrolled", "not_found", "created"
+    temporary_password: Optional[str] = None
 
 class BulkEnrollmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -173,7 +176,7 @@ def create_enrollment(
         is_active=new_enrollment.is_active
     )
 
-@router.post("/bulk", response_model=BulkEnrollmentResponse, status_code=status.HTTP_200_OK)
+@router.post("/bulk", response_model=BulkEnrollmentResponse, response_model_exclude_none=True, status_code=status.HTTP_200_OK)
 def bulk_enroll_students(
     payload: BulkEnrollmentRequest,
     request: Request,
@@ -211,19 +214,31 @@ def bulk_enroll_students(
     for email in payload.student_emails:
         clean_email = email.strip().lower()
         student = db.query(User).filter(func.lower(User.email) == clean_email).first()
+        temporary_password = None
+
+        if student and payload.create_accounts and student.hashed_password == "PENDING_PASSWORD_RESET":
+            temporary_password = secrets.token_urlsafe(12)
+            student.hashed_password = hash_password(temporary_password)
+            add_audit_log(
+                db, request, "password_initialized",
+                user_id=str(current_user.get("id")), resource_type="user", resource_id=student.id,
+                details="Initialized temporary password for legacy bulk-enrollment account",
+            )
+            db.commit()
 
         if not student:
             if payload.create_accounts:
                 # Extract a readable default name from the email prefix
                 default_name = clean_email.split('@')[0].replace('.', ' ').title()
                 
-                # User.id is String(36) and hashed_password is nullable=False
+                # Return this once so the student can log in; only its hash is stored.
+                temporary_password = secrets.token_urlsafe(12)
                 student = User(
                     id=str(uuid.uuid4()),
                     full_name=default_name,
                     email=clean_email,
                     role="student",
-                    hashed_password="PENDING_PASSWORD_RESET"  # Placeholder for newly created placeholder accounts
+                    hashed_password=hash_password(temporary_password)
                 )
                 db.add(student)
                 add_audit_log(
@@ -259,10 +274,18 @@ def bulk_enroll_students(
                 )
                 db.commit()
                 enrolled_count += 1
-                details.append(BulkEnrollmentDetail(email=email, status="enrolled"))
+                details.append(BulkEnrollmentDetail(
+                    email=email,
+                    status="enrolled",
+                    temporary_password=temporary_password,
+                ))
             else:
                 already_enrolled_count += 1
-                details.append(BulkEnrollmentDetail(email=email, status="already_enrolled"))
+                details.append(BulkEnrollmentDetail(
+                    email=email,
+                    status="already_enrolled",
+                    temporary_password=temporary_password,
+                ))
         else:
             # Enrollment.id is String(36) requiring an explicit UUID string
             new_enrollment = Enrollment(
@@ -279,7 +302,11 @@ def bulk_enroll_students(
             )
             db.commit()
             enrolled_count += 1
-            details.append(BulkEnrollmentDetail(email=email, status="enrolled"))
+            details.append(BulkEnrollmentDetail(
+                email=email,
+                status="enrolled",
+                temporary_password=temporary_password,
+            ))
 
     return BulkEnrollmentResponse(
         enrolled=enrolled_count,

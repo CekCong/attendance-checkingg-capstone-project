@@ -23,7 +23,7 @@ def risk_level(risk_score: float) -> str:
     return "LOW"
 
 @router.post("/risk/assess", response_model=RiskAssessResponse)
-async def assess_risk(request: RiskAssessRequest):
+def assess_risk(request: RiskAssessRequest):
     risk_score, signal_breakdown = calculate_risk_score(request)
 
     recommendations = []

@@ -188,15 +188,15 @@ def list_courses(
     }
 
 
-# POST /courses/ - Create a new course (Admin or Instructor)
+# POST /courses/ - Create a new course (Admin only)
 @router.post("/", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)
 def create_course(
     payload: CourseCreate,
-    current_user: Dict[str, Any] = Depends(require_roles("admin", "instructor")),
+    current_user: Dict[str, Any] = Depends(require_roles("admin")),
     db: Session = Depends(get_db)
 ):
     """
-    Create a course. Instructors can only assign new courses to themselves.
+    Create a course. Requires administrator role.
     """
     existing = db.query(Course).filter(Course.code == payload.code).first()
     if existing:

@@ -30,7 +30,7 @@ def check_camera_readiness(request: CameraReadinessRequest):
 # =============================================================================
 
 @router.post("/face/enroll", response_model=FaceEnrollResponse, status_code=201)
-async def enroll_face(request: FaceEnrollRequest):
+def enroll_face(request: FaceEnrollRequest):
     """
     Enroll a user's face for future verification.
     Takes in a base64 image, user ID, and camera consent, returns a hash of the face template.
@@ -97,7 +97,7 @@ async def enroll_face(request: FaceEnrollRequest):
 # =============================================================================
 
 @router.post("/face/verify", response_model=FaceVerifyResponse)
-async def verify_face(request: FaceVerifyRequest):
+def verify_face(request: FaceVerifyRequest):
     """
     Verify a face against an enrolled template.
     Takes in a base64 image and a reference hash, returns match score and pass/fail.
@@ -167,9 +167,9 @@ async def verify_face(request: FaceVerifyRequest):
 
 
 @router.post("/face/match")
-async def match_face(request: FaceVerifyRequest):
+def match_face(request: FaceVerifyRequest):
     """
     Legacy face matching endpoint. Redirects to /face/verify.
     Kept for backwards compatibility.
     """
-    return await verify_face(request)
+    return verify_face(request)

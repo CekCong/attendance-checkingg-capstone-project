@@ -3,6 +3,7 @@
 -r module3-face-recognition/requirements.txt
 pytest==9.2.0
 pytest-asyncio==1.4.1
+colorama==0.4.6
 faker>=22
 requests>=2.34.2
 # QR fixtures are encoded independently of the browser decoder.

@@ -71,7 +71,7 @@ class SessionCreate(BaseModel):
 
 class SessionUpdate(BaseModel):
     name: Optional[str] = None
-    session_type: Optional[str] = None
+    session_type: Optional[str] = Field(None, pattern="^(lecture|tutorial|lab|exam)$")
     description: Optional[str] = None
     scheduled_start: Optional[datetime] = None
     scheduled_end: Optional[datetime] = None
@@ -435,6 +435,28 @@ def update_session(
         )
 
     update_data = payload.model_dump(exclude_unset=True)
+
+    for field_name in ("session_type", "scheduled_start", "scheduled_end", "checkin_opens_at", "checkin_closes_at"):
+        if field_name in update_data and update_data[field_name] is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} cannot be null.",
+            )
+
+    scheduled_start = update_data.get("scheduled_start", session_obj.scheduled_start)
+    scheduled_end = update_data.get("scheduled_end", session_obj.scheduled_end)
+    checkin_opens_at = update_data.get("checkin_opens_at", session_obj.checkin_opens_at)
+    checkin_closes_at = update_data.get("checkin_closes_at", session_obj.checkin_closes_at)
+
+    def comparable(value: datetime) -> datetime:
+        return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+    if "scheduled_start" in update_data and comparable(scheduled_start) <= datetime.now(timezone.utc).replace(tzinfo=None):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="scheduled_start must be in the future.")
+    if comparable(scheduled_end) <= comparable(scheduled_start):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="scheduled_end must be after scheduled_start.")
+    if comparable(checkin_closes_at) <= comparable(checkin_opens_at):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="checkin_closes_at must be after checkin_opens_at.")
 
     if "status" in update_data and update_data["status"] != session_obj.status:
         current_status = session_obj.status
