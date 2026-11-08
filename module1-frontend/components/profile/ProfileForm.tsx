@@ -9,10 +9,11 @@ import { useTheme } from "@/components/theme/ThemeProvider";
 import type { ThemePreference } from "@/lib/theme";
 
 export function ProfileForm() {
-  const { user, updateProfile, changePassword } = useAuth();
+  const { user, updateProfile, changePassword, deleteAccount } = useAuth();
   const { preference, setPreference } = useTheme();
   const [username, setUsername] = useState(user?.username ?? "");
   const [fullName, setFullName] = useState(user?.full_name ?? "");
+  const [matriculation, setMatriculation] = useState(user?.matriculation_number ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
   const [language, setLanguage] = useState(user?.language ?? "en");
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
@@ -25,6 +26,10 @@ export function ProfileForm() {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [pendingProfile, setPendingProfile] = useState(false);
   const [pendingPassword, setPendingPassword] = useState(false);
+  const [deletionPassword, setDeletionPassword] = useState("");
+  const [confirmDeletion, setConfirmDeletion] = useState(false);
+  const [deletionError, setDeletionError] = useState<string | null>(null);
+  const [pendingDeletion, setPendingDeletion] = useState(false);
 
   if (!user) return null;
 
@@ -37,15 +42,19 @@ export function ProfileForm() {
       return;
     }
     setPendingProfile(true);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    updateProfile({
-      username: username.trim(),
-      full_name: fullName.trim(),
-      email: email.trim(),
-      language,
-    });
-    setPendingProfile(false);
-    setProfileMessage("Profile saved.");
+    try {
+      await updateProfile({ full_name: fullName.trim(), language,
+        ...(!user?.matriculation_number && matriculation.trim() ? { matriculation_number: matriculation.trim().toUpperCase() } : {}) });
+      setProfileMessage(
+        "Profile saved. Language preference applies to this device.",
+      );
+    } catch (err) {
+      setProfileError(
+        err instanceof Error ? err.message : "Could not save profile.",
+      );
+    } finally {
+      setPendingProfile(false);
+    }
   }
 
   async function onChangePassword(event: FormEvent) {
@@ -64,7 +73,9 @@ export function ProfileForm() {
       setConfirmPassword("");
       setPasswordMessage("Password updated.");
     } catch (err) {
-      setPasswordError(err instanceof Error ? err.message : "Could not update password.");
+      setPasswordError(
+        err instanceof Error ? err.message : "Could not update password.",
+      );
     } finally {
       setPendingPassword(false);
     }
@@ -80,19 +91,31 @@ export function ProfileForm() {
           Profile
         </h1>
         <p className="mt-1 text-sm text-white/75">
-          Manage your account. Changes are stored on this device for the current
-          session.
+          Your display name and password are saved to your account. Appearance
+          and language preferences apply to this device.
         </p>
       </div>
 
       <GlassCard className="p-6 sm:p-7">
-        <h2 className="font-display text-xl font-semibold text-white">Account</h2>
+        <h2 className="font-display text-xl font-semibold text-white">
+          Account
+        </h2>
         <form className="mt-5 space-y-4" onSubmit={onSaveProfile}>
+          {user.role === "student" && <label className="block text-sm font-medium text-white/90">Matriculation number
+            <input value={user.matriculation_number || matriculation} readOnly={Boolean(user.matriculation_number)}
+              onChange={(event) => setMatriculation(event.target.value)} minLength={3} maxLength={32}
+              pattern="[A-Za-z0-9][A-Za-z0-9-]{2,31}" autoCapitalize="characters" autoComplete="off" spellCheck={false}
+              placeholder="Link your student number"
+              className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white" />
+            <span className="mt-2 block text-xs text-white/75">{user.matriculation_number
+              ? "Linked to your account. Contact an administrator if this needs correcting."
+              : "Enter your own number and save to join courses where your tutor has uploaded your matriculation number."}</span>
+          </label>}
           <label className="block text-sm font-medium text-white/90">
             Username
             <input
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              readOnly
               autoComplete="username"
               className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none focus:border-white/60"
             />
@@ -111,7 +134,7 @@ export function ProfileForm() {
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              readOnly
               autoComplete="email"
               className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none focus:border-white/60"
             />
@@ -130,8 +153,14 @@ export function ProfileForm() {
               ))}
             </select>
           </label>
-          {profileError && <p className="text-sm text-rose-200">{profileError}</p>}
-          {profileMessage && <p className="text-sm text-emerald-600 dark:text-emerald-200">{profileMessage}</p>}
+          {profileError && (
+            <p className="text-sm text-rose-200">{profileError}</p>
+          )}
+          {profileMessage && (
+            <p className="text-sm text-emerald-600 dark:text-emerald-200">
+              {profileMessage}
+            </p>
+          )}
           <button
             type="submit"
             disabled={pendingProfile}
@@ -143,9 +172,12 @@ export function ProfileForm() {
       </GlassCard>
 
       <GlassCard className="p-6 sm:p-7">
-        <h2 className="font-display text-xl font-semibold text-white">Appearance</h2>
+        <h2 className="font-display text-xl font-semibold text-white">
+          Appearance
+        </h2>
         <p className="mt-1 text-sm text-white/70">
-          Default follows your device. Light uses a pale base; dark uses a near-black base.
+          Default follows your device. Light uses a pale base; dark uses a
+          near-black base.
         </p>
         <div className="mt-4 grid grid-cols-3 gap-2">
           {(
@@ -172,20 +204,27 @@ export function ProfileForm() {
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3">
           <div className="rounded-2xl border border-slate-200 bg-slate-100 p-3 text-slate-900">
-            <p className="text-xs font-semibold uppercase tracking-wide">Light</p>
+            <p className="text-xs font-semibold uppercase tracking-wide">
+              Light
+            </p>
             <p className="mt-1 text-sm">Pale gray-white canvas</p>
           </div>
           <div className="rounded-2xl border border-slate-700 bg-slate-950 p-3 text-slate-100">
-            <p className="text-xs font-semibold uppercase tracking-wide">Dark</p>
+            <p className="text-xs font-semibold uppercase tracking-wide">
+              Dark
+            </p>
             <p className="mt-1 text-sm">Near-black canvas</p>
           </div>
         </div>
       </GlassCard>
 
       <GlassCard className="p-6 sm:p-7">
-        <h2 className="font-display text-xl font-semibold text-white">Password</h2>
+        <h2 className="font-display text-xl font-semibold text-white">
+          Password
+        </h2>
         <p className="mt-1 text-sm text-white/70">
-          Password updates are stubbed and are not sent to a server yet.
+          Use your current password to set a new password of at least 8
+          characters. Updating your password signs you out on all devices.
         </p>
         <form className="mt-5 space-y-4" onSubmit={onChangePassword}>
           <label className="block text-sm font-medium text-white/90">
@@ -218,14 +257,51 @@ export function ProfileForm() {
               className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white outline-none focus:border-white/60"
             />
           </label>
-          {passwordError && <p className="text-sm text-rose-200">{passwordError}</p>}
-          {passwordMessage && <p className="text-sm text-emerald-200">{passwordMessage}</p>}
+          {passwordError && (
+            <p className="text-sm text-rose-200">{passwordError}</p>
+          )}
+          {passwordMessage && (
+            <p className="text-sm text-emerald-200">{passwordMessage}</p>
+          )}
           <button
             type="submit"
             disabled={pendingPassword}
             className="w-full rounded-2xl bg-white/90 px-6 py-3.5 text-sm font-semibold text-sky-950 disabled:opacity-60"
           >
             {pendingPassword ? "Updating…" : "Update password"}
+          </button>
+        </form>
+      </GlassCard>
+      <GlassCard className="p-6 sm:p-7">
+        <h2 className="font-display text-xl font-semibold text-white">Delete account</h2>
+        <p className="mt-2 text-sm text-white/75">
+          This disables your account and signs you out immediately. Your profile,
+          face template, devices, enrollments and attendance will be erased after
+          30 days. Security audit records are retained. This cannot be undone here.
+        </p>
+        <form className="mt-5 space-y-4" onSubmit={async (event) => {
+          event.preventDefault();
+          if (!confirmDeletion) return;
+          setPendingDeletion(true);
+          setDeletionError(null);
+          try { await deleteAccount(deletionPassword); }
+          catch (error) { setDeletionError(error instanceof Error ? error.message : "Could not schedule deletion."); }
+          finally { setPendingDeletion(false); }
+        }}>
+          <label className="block text-sm text-white/90">
+            Password to confirm deletion
+            <input type="password" autoComplete="current-password" required value={deletionPassword}
+              onChange={(event) => setDeletionPassword(event.target.value)}
+              className="mt-2 w-full rounded-2xl border border-white/25 bg-white/15 px-4 py-3 text-white" />
+          </label>
+          <label className="flex gap-2 text-sm text-white/90">
+            <input type="checkbox" checked={confirmDeletion} onChange={(event) => setConfirmDeletion(event.target.checked)} />
+            I understand that my account will be disabled and my data erased.
+          </label>
+          {deletionError && <p role="alert" className="text-sm text-rose-200">{deletionError}</p>}
+          <button type="submit" disabled={!confirmDeletion || pendingDeletion}
+            className="w-full rounded-2xl bg-rose-700 px-6 py-3.5 text-sm font-semibold text-white disabled:opacity-60">
+            {pendingDeletion ? "Scheduling…" : "Schedule account deletion"}
           </button>
         </form>
       </GlassCard>

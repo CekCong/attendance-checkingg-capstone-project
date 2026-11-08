@@ -1,0 +1,21 @@
+# Optional build overlay for networks with a private HTTPS inspection CA.
+# PROXY_CA_BUNDLE must point to a trusted certificate bundle on the build host.
+services:
+  db-migrate:
+    build:
+      secrets: [proxy_ca]
+  backend:
+    build:
+      secrets: [proxy_ca]
+  face-recognition:
+    build:
+      secrets: [proxy_ca]
+  frontend:
+    build:
+      secrets: [proxy_ca]
+  dashboard:
+    build:
+      secrets: [proxy_ca]
+secrets:
+  proxy_ca:
+    file: ${PROXY_CA_BUNDLE:?Set PROXY_CA_BUNDLE to the trusted CA bundle}

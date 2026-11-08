@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from ..audit import add_audit_log
-from ..course_access import require_course_staff_access
+from ..course_access import require_course_staff_access, staff_course_ids
 from ..database import get_db
 from ..models import CheckinModel, CourseModel, EnrollmentModel, SessionModel, UserModel
 from ..security import get_current_user
@@ -51,7 +51,11 @@ def _render_csv(records: list[dict[str, Any]]) -> str:
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=CSV_FIELDS, extrasaction="ignore")
     writer.writeheader()
-    writer.writerows(records)
+    # Spreadsheet applications execute formula-looking text even in quoted CSV.
+    for record in records:
+        writer.writerow({key: ("'" + value if isinstance(value, str) and
+            (value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")))
+            else value) for key, value in record.items()})
     return output.getvalue()
 
 
@@ -59,7 +63,7 @@ def _log_export(
     db: Session,
     request: Request,
     user: Dict[str, Any],
-    resource_id: str,
+    resource_id: Optional[str],
     resource_type: str,
 ) -> None:
     add_audit_log(
@@ -74,7 +78,52 @@ def _log_export(
 
 
 def _as_date(value: Optional[datetime]) -> Optional[str]:
-    return value.date().isoformat() if value else None
+    return (value.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=8))).date().isoformat()
+            if value else None)
+
+
+@router.get("/checkins")
+def export_checkins(
+    request: Request,
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    session_id: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user["role"] not in {"instructor", "admin"}:
+        raise HTTPException(403, "Instructor or administrator access required")
+    query = db.query(CheckinModel, SessionModel, UserModel).join(
+        SessionModel, CheckinModel.session_id == SessionModel.id,
+    ).join(UserModel, CheckinModel.student_id == UserModel.id)
+    if user["role"] != "admin":
+        query = query.filter(SessionModel.course_id.in_(staff_course_ids(db, user)))
+    if session_id:
+        session = db.query(SessionModel).filter_by(id=session_id).first()
+        if session is None:
+            raise HTTPException(404, "Session not found")
+        _authorize_course_export(db, user, session.course_id)
+        query = query.filter(CheckinModel.session_id == session_id)
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(400, "Start date must precede end date")
+    if start_date:
+        query = query.filter(CheckinModel.checked_in_at >= start_date)
+    if end_date:
+        query = query.filter(CheckinModel.checked_in_at <= end_date)
+    records = [{
+        "checkin_id": checkin.id, "session_id": session.id,
+        "student_id": student.id, "student_name": student.full_name,
+        "student_email": student.email, "session_date": _as_date(session.scheduled_start),
+        "session_name": session.name, "status": checkin.status,
+        "checked_in_at": checkin.checked_in_at.replace(tzinfo=timezone.utc).isoformat(), "risk_score": checkin.risk_score,
+    } for checkin, session, student in query.order_by(CheckinModel.checked_in_at.desc(), CheckinModel.id).all()]
+    _log_export(db, request, user, session_id, "session_attendance" if session_id else "attendance")
+    if format == "json":
+        return {"total": len(records), "records": records}
+    return Response(_render_csv(records), media_type="text/csv", headers={
+        "Content-Disposition": 'attachment; filename="attendance.csv"', "Cache-Control": "no-store",
+    })
 
 
 @router.get("/attendance/{course_id}", status_code=status.HTTP_200_OK)
@@ -91,13 +140,13 @@ def export_course_attendance(
     session_query = db.query(SessionModel).filter(SessionModel.course_id == course_id)
     if start_date:
         session_query = session_query.filter(
-            SessionModel.scheduled_start >= datetime.combine(start_date, time.min)
+            SessionModel.scheduled_start >= datetime.combine(start_date, time.min) - timedelta(hours=8)
         )
     if end_date:
         session_query = session_query.filter(
             SessionModel.scheduled_start < datetime.combine(
                 date.fromordinal(end_date.toordinal() + 1), time.min
-            )
+            ) - timedelta(hours=8)
         )
     sessions = session_query.order_by(SessionModel.scheduled_start.asc()).all()
     enrollments = (
@@ -123,9 +172,17 @@ def export_course_attendance(
     for checkin in checkins:
         checkin_by_pair.setdefault((checkin.student_id, checkin.session_id), checkin)
 
+    # Dropping enrollment must not hide an already recorded attendance result.
+    students = {student.id: student for _, student in enrollments}
+    historical_ids = {checkin.student_id for checkin in checkins} - students.keys()
+    historical_students = {student.id: student for student in db.query(UserModel).filter(UserModel.id.in_(historical_ids)).all()}
+
     records = []
     for session in sessions:
-        for _, student in enrollments:
+        session_students = dict(students)
+        session_students.update({student_id: student for student_id, student in historical_students.items()
+                                 if (student_id, session.id) in checkin_by_pair})
+        for student in sorted(session_students.values(), key=lambda item: (item.full_name, item.id)):
             checkin = checkin_by_pair.get((student.id, session.id))
             records.append(
                 {
@@ -136,7 +193,7 @@ def export_course_attendance(
                     "session_name": session.name,
                     "status": checkin.status if checkin else "absent",
                     "checked_in_at": (
-                        checkin.checked_in_at.isoformat() if checkin else ""
+                        checkin.checked_in_at.replace(tzinfo=timezone.utc).isoformat() if checkin else ""
                     ),
                     "risk_score": checkin.risk_score if checkin else 0.0,
                 }
@@ -195,7 +252,7 @@ def export_session_attendance(
             "session_name": session.name,
             "status": checkin.status,
             "checked_in_at": (
-                checkin.checked_in_at.isoformat() if checkin.checked_in_at else ""
+                checkin.checked_in_at.replace(tzinfo=timezone.utc).isoformat() if checkin.checked_in_at else ""
             ),
             "risk_score": checkin.risk_score or 0.0,
         }

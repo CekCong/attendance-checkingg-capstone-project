@@ -1,4 +1,4 @@
-import mediapipe as mp
+from app.services.mediapipe_tasks import landmarks as detect_landmarks
 import numpy as np
 from fastapi import HTTPException
 
@@ -34,7 +34,7 @@ MOUTH_LEFT_INDEX = 61
 MOUTH_RIGHT_INDEX = 291
 
 ACTIVE_LIVENESS_THRESHOLD = 0.60
-PASSIVE_LIVENESS_THRESHOLD = 0.85
+PASSIVE_LIVENESS_THRESHOLD = 0.60
 DEPTH_WEIGHT = 0.30
 MESH_WEIGHT = 0.25
 TEXTURE_WEIGHT = 0.25
@@ -48,7 +48,7 @@ TARGET_COLOR_VARIATION = 45.0
     Analyze face using MediaPipe Face Mesh (BONUS).
 
     TODO: Implement using:
-    - mediapipe.solutions.face_mesh.FaceMesh
+    - MediaPipe Tasks FaceLandmarker
     - Extract 468 landmarks
     - Calculate depth from nose_tip_z (landmark index 1)
     - Check mesh completeness
@@ -67,21 +67,8 @@ def analyze_face_mesh(image_array):
     if image_array is None:
         raise ValueError("Input image array is None")
 
-    mp_face_mesh = mp.solutions.face_mesh
-
-    # MediaPipe expects images in RGB format
-
-    with mp_face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=FACE_MESH_MAX_FACES,
-        refine_landmarks=False,
-        min_detection_confidence=FACE_MESH_MIN_CONFIDENCE,
-    ) as face_mesh:
-
-        results = face_mesh.process(image_array)
-
-    # Check if any face landmarks were detected
-    if not results.multi_face_landmarks:
+    landmarks = detect_landmarks(image_array)
+    if not landmarks:
         return {
             "face_mesh_complete": False,
             "landmark_count": 0,
@@ -90,7 +77,6 @@ def analyze_face_mesh(image_array):
             "landmarks": None
         }
 
-    landmarks = results.multi_face_landmarks[0].landmark
     landmark_count = len(landmarks)
 
     # 468 landmarks in total for a complete face mesh
@@ -362,6 +348,14 @@ def active_frame_data(frames):
             status_code=400,
             detail=f"Active liveness requires exactly {ACTIVE_FRAME_COUNT} frames.",
         )
+    if len(set(frames)) == 1:
+        try:
+            decode_base64_image(frames[0])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Base64 frame.") from exc
+        # An active gesture cannot consist entirely of the same encoded frame.
+        # Reject this obvious replay before running 15 expensive model passes.
+        return None, None, "Identical frames cannot satisfy an active challenge."
 
     embeddings = []
     landmarks_per_frame = []

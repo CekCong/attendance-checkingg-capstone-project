@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Manrope, Syne } from "next/font/google";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
+import { ServiceWorker } from "@/components/pwa/ServiceWorker";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -32,7 +33,6 @@ export const viewport: Viewport = {
   themeColor: "#0c4a6e",
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
 };
 
 export default function RootLayout({
@@ -50,6 +50,7 @@ export default function RootLayout({
         />
       </head>
       <body className="relative min-h-full flex flex-col overflow-x-hidden">
+        <ServiceWorker />
         <div className="aurora-layer" aria-hidden="true">
           <div className="aurora-blob" />
           <div className="aurora-blob" />

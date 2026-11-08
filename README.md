@@ -46,7 +46,7 @@ Welcome to our capstone project! The goal is to build a secure, privacy-preservi
 - Anti-spoofing heuristics
 
 ### Module 4: Observability & Instructor Dashboard 
-**Recommended Tech Stack**: Streamlit, Prometheus, Grafana
+**Implemented stack**: Next.js instructor surface, Prometheus, Grafana
 - Instructor web interface
 - Real-time analytics
 - Audit log explorer
@@ -55,18 +55,20 @@ Welcome to our capstone project! The goal is to build a secure, privacy-preservi
 
 ---
 
+
+
 ## Getting Started
 
 ### Prerequisites
 - Docker & Docker Compose
 - Python 3.11+
-- Node.js 18+
+- Node.js 20.9+
 
 ### Quick Start
 
 ```bash
 # Navigate to project directory
-cd student-starter
+cd attendance-checkin-pwa
 
 # Start infrastructure services (database, redis, prometheus)
 docker-compose up -d postgres redis prometheus grafana
@@ -95,26 +97,29 @@ docker compose up -d frontend dashboard face-recognition
 ```
 
 Open http://localhost:3000 for students or http://localhost:8501 for tutors.
-Select **Sign up**, enter your full name, email, and a password of at least
-8 characters, then confirm the password. After creating the account, sign in
-with that email and password. Tutor accounts use the backend's `instructor`
-role. Accounts are saved in PostgreSQL; an email can only be registered once.
+Students can choose **Create a student account** and enter a name, email, and
+password of at least 8 characters. Staff accounts use Hongyu's existing
+administrator provisioning flow; public signup cannot grant instructor or admin
+roles. See [production identity](docs/PRODUCTION-IDENTITY.md).
 
-The web containers use `BACKEND_URL=http://backend:8000` for server-side
-authentication. Browser requests continue to use `http://localhost:8000`.
+The web containers use `BACKEND_INTERNAL_URL=http://backend:8000` for server-side
+authentication and student API requests. Tutor API requests use `NEXT_PUBLIC_API_URL`.
 
 ### Tutor courses
 
-Sign in to http://localhost:8501, then choose **New course** under **Your courses**.
-Enter a unique course code and name, choose an academic year/semester from the
-dropdown, and select **Create course**.
-The course is saved, assigned to your tutor account, and automatically selected
-for session creation. Use the course dropdown to switch between your courses.
+Administrators create courses in the catalog. Sign in to http://localhost:8501,
+then choose **Add existing course** under **Your courses**. Select an available
+course and choose **Add to my courses**. This assigns the existing course to your
+tutor account and selects it for scheduling; it does not create another course.
+Only active, unassigned courses are available, including checks for assignments
+through existing lessons. Ask an administrator if none are available. Instructors
+cannot create catalog entries through the UI or API. Use the course dropdown to
+switch between your courses.
 In **Lesson calendar**, select **Add lesson**. Choose a lesson title, type, and
 optional location. Select **Every week** to choose a weekday, inclusive start/end
 dates, and start/end times, or **Does not repeat** for a single lesson. Check the
 lesson-count/date preview, then save. All scheduling and calendar times use
-Singapore time (SGT); semester options do not assume official term dates or holidays.
+Singapore time (SGT).
 
 Use **Today**, the previous/next arrows, and **Day / Week / Month** to navigate the calendar.
 On laptops the calendar sits on the left and attendance tools, flagged check-ins,
@@ -122,7 +127,7 @@ and analytics appear on the right. On smaller screens these sections stack.
 Select a lesson block to show its attendance controls in the right panel.
 Choose **Delete lesson or course…** in that panel to delete **this lesson only**
 (the selected date and time) or **Delete all** (the entire course and every lesson).
-For a course without lessons, use **Courses & semesters**, select the course,
+For a course without lessons, use **Courses, students & semesters**, select the course,
 and choose **Delete course…**. Both choices require confirmation and permanently
 remove the associated attendance records; deleting a whole course also removes
 its enrollments. Deleting one recurring lesson leaves other dates and other
@@ -132,6 +137,46 @@ scroll horizontally. Weekly schedules create separate attendance sessions for
 each date (up to one year). A conflict rejects the whole schedule, and retrying
 the same submission does not create duplicate lessons. Series editing and
 automatic holiday exclusions are not included.
+
+### Enrolling students with a CSV roster
+
+In the tutor dashboard, open **Courses, students & semesters**, select a course,
+then expand **Enroll students · Upload CSV**. Download the template or upload a
+UTF-8 CSV with this column (numbers are text, so preserve leading zeroes in Excel):
+
+```csv
+matriculation_number
+U2345678A
+U2345679B
+```
+
+Preview the matches, then choose **Import roster into [course]**. Registered
+students with matching numbers are enrolled immediately. Unknown numbers remain
+pending until the student signs up or links their number in **Profile**. The
+**Uploaded roster** list shows pending and enrolled statuses; **Refresh** updates it.
+Imports add to the course and do not remove other students. Repeated rows/imports
+do not create duplicate enrollments. Invalid files show row errors before any
+rows are saved. Limit: 1,000 rows and 1 MB per upload.
+
+New student signup asks for a matriculation number. Existing students can link it
+once in Profile. Numbers are trimmed, uppercased, and unique across accounts;
+after linking, students cannot change or remove the number themselves. Student
+**My courses** shows their enrollments. Joining a lesson still uses the tutor's
+QR/passcode followed by the existing verification flow.
+
+For existing installations, apply the new schema before restarting the backend:
+
+```bash
+docker compose run --rm --no-deps db-migrate
+docker compose restart backend
+```
+
+Regression check (isolated databases; Redis on port 6380):
+
+```bash
+PYTHONPATH=module2-backend:tests/regression DATABASE_URL=sqlite:////tmp/saiv-tests.db \
+  python3 -m pytest tests/regression/test_course_rosters.py -v
+```
 
 ### Attendance QR and passcode
 
@@ -158,30 +203,71 @@ attendance window. Selecting a calendar lesson alone does not open attendance.
 Under **Student website URL**, enter the address where students can reach the
 student portal. Use the shared HTTPS student URL for phones; `localhost:3000`
 only works on the same computer. Camera and location access require HTTPS on
-other devices. The student portal proxies attendance requests to `BACKEND_URL`,
+other devices. The student portal proxies attendance requests to `BACKEND_INTERNAL_URL`,
 so phones do not need direct access to backend port 8000.
 
-Students scan with their phone's Camera app or type the passcode in the student
-portal, sign in, confirm sensor consent, capture a live selfie, and allow location
-access. The backend records the check-in and reports approved, flagged for review,
+Students scan with their phone's Camera app, use **Scan QR code** in the student
+portal, or type the attendance passcode. The code identifies the lesson automatically;
+students do not select a session or enter a second code. They sign in, confirm
+sensor consent, enroll their face if needed, allow location
+access, and complete the active liveness challenge. Device attestation and server
+verification remain enabled. The backend records the check-in and reports approved, flagged for review,
 or rejected. Students must already be enrolled in the course; a code does not
 bypass enrollment or verification. Face-matching courses still require face enrollment.
+
+Rejected students can choose **Retry attendance** on the result screen or in
+**Attendance history** while the lesson's check-in window is open. Each retry
+requires fresh location, liveness, and device verification and a valid current
+attendance code. Approved, pending, flagged, and appealed records cannot be
+resubmitted. Retries update the same attendance entry so reports count the student
+once; previous outcomes remain in the audit log. Rejection explanations appear
+on the result screen and in history. New liveness failures include a specific
+reason when the verification service supplies one; older records may only have
+a general liveness-failure explanation.
+
+Before enrollment and each liveness recording, **Check camera & start challenge**
+sends one temporary image to check face visibility, framing and facial landmarks.
+No template or attendance record is created by this preparation check. Lighting
+tips are advisory when the face can already be read. A three-second countdown
+precedes three guided phases (neutral, gesture, neutral), with reaction time before
+each set of five frames. Close your eyes for two seconds and reopen them for the
+blink challenge; hold the slight head turn or smile until the return-to-neutral
+prompt. Preparation failures can be retried on the camera
+screen; cancelled, interrupted or expired recordings are not submitted. Real face
+matching and liveness thresholds are unchanged.
+
+For a local presentation, an independent **biometric demo mode** can simulate
+passing face and liveness results. It is off by default and prohibited in
+`SAIV_ENV=production`. It skips face enrollment for the demo workflow without
+writing a fake face template. The portals and saved student records label the
+bypass; course enrollment, attendance codes, location and device checks still apply.
+Existing attendance records are not changed when the mode is enabled.
+
+```bash
+# Enable for the currently running local demo
+BIOMETRIC_DEMO_MODE=true docker compose up -d --no-deps backend
+# Restore real biometric verification afterwards
+BIOMETRIC_DEMO_MODE=false docker compose up -d --no-deps backend
+```
 
 QR images are generated locally by the backend. Student URLs can be changed
 without rotating a currently active passcode. No external QR service is used.
 
 ```bash
-RUN_COURSE_TESTS=1 python3 -m unittest discover -s tests/regression -p test_attendance_codes.py -v
-RUN_COURSE_TESTS=1 python3 -m unittest discover -s tests/regression -p test_attendance_demo.py -v
-RUN_COURSE_TESTS=1 python3 -m unittest discover -s tests/regression -p test_course_deletion.py -v
+PYTHONPATH=module2-backend:tests/regression DATABASE_URL=sqlite:////tmp/saiv-tests.db \
+  python3 -m pytest tests/regression/test_calendar_attendance_merge.py -v
 ```
+These tests use isolated databases, Redis on port 6380, and explicit biometric
+test doubles. They cover the new controls together with Hongyu's verification flow.
 
 Course assignments are stored in the `course_instructors` table, created by the
-backend on startup. Existing assignments through sessions remain supported.
+schema migration service. Existing assignments through sessions remain supported.
 Recurring schedules and their occurrences are saved in `session_series` and
-`session_occurrences`, also created on backend startup.
+`session_occurrences`, also created by the schema migration service.
 
-To verify course creation and permissions against the running backend (creates test data):
+The legacy live course tests below require an isolated `SAIV_ENV=test` backend
+with `ALLOW_PRIVILEGED_SELF_REGISTRATION=true` and increased fixture rate limits.
+They must not be pointed at a production or shared deployment.
 
 ```bash
 RUN_COURSE_TESTS=1 python3 -m unittest discover -s tests/regression -p test_tutor_courses.py -v
@@ -189,7 +275,8 @@ RUN_COURSE_TESTS=1 python3 -m unittest discover -s tests/regression -p test_recu
 docker compose exec -T dashboard node < tests/regression/calendar_helpers.cjs
 ```
 
-To verify registration and login on both running portals (creates test accounts):
+To verify student registration and the staff-signup restriction on running portals
+(creates student test accounts):
 
 ```bash
 RUN_WEB_AUTH_TESTS=1 python3 -m unittest discover -s tests/regression -p test_web_registration.py -v
@@ -206,7 +293,7 @@ You have access to the public test suite (75% of your grade).
 ### Step 1: Install Test Dependencies
 
 ```bash
-cd student-starter
+cd attendance-checkin-pwa
 
 # Create virtual environment
 python3 -m venv .venv
@@ -234,8 +321,10 @@ environment, use the environment's Python directly instead:
 .\.venv\Scripts\python.exe -m pip install -r requirements-test.txt
 ```
 
-The backend allows up to 100,000 registration and login attempts per IP per
-hour so repeated test runs are not blocked by rate limiting.
+The backend enforces 10 registrations/hour/IP, 60 logins/hour/IP,
+1,000 authenticated API requests/hour/user, and 10 check-ins/minute/user.
+See [authentication and development deployment](docs/AUTH-DEPLOYMENT.md) for
+isolated test overrides and Docker configuration.
 
 ### Step 2: Start Your Services
 
@@ -366,7 +455,7 @@ Please review these specifications carefully:
 ## Project Structure
 
 ```
-student-starter/
+attendance-checkin-pwa/
 ├── module1-frontend/          # PWA (your implementation)
 ├── module2-backend/           # API (your implementation)
 ├── module3-face-recognition/  # ML service (your implementation)

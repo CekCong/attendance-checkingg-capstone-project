@@ -1,14 +1,16 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import func, and_, or_, select
 
 from ..database import get_db
-from ..models import AuditLogModel
+from ..models import AuditLogModel, SessionModel, CheckinModel
+from ..course_access import staff_course_ids
 from ..security import require_roles
 
 
@@ -87,6 +89,16 @@ def get_audit_logs(
     db: Session = Depends(get_db),
 ):
     query = db.query(AuditLogModel)
+    if _user["role"] != "admin":
+        courses = staff_course_ids(db, _user)
+        sessions = select(SessionModel.id).where(SessionModel.course_id.in_(courses))
+        checkins = select(CheckinModel.id).where(CheckinModel.session_id.in_(sessions))
+        query = query.filter(or_(
+            AuditLogModel.user_id == _user["id"],
+            and_(AuditLogModel.resource_type == "course", AuditLogModel.resource_id.in_(courses)),
+            and_(AuditLogModel.resource_type == "session", AuditLogModel.resource_id.in_(sessions)),
+            and_(AuditLogModel.resource_type == "checkin", AuditLogModel.resource_id.in_(checkins)),
+        ))
     if user_id:
         query = query.filter(AuditLogModel.user_id == user_id)
     if action:
@@ -98,7 +110,7 @@ def get_audit_logs(
 
     total = query.count()
     items = (
-        query.order_by(AuditLogModel.timestamp.desc())
+        query.order_by(AuditLogModel.timestamp.desc(), AuditLogModel.id)
         .offset(offset)
         .limit(limit)
         .all()
@@ -132,11 +144,23 @@ def create_audit_log(
 
 @router.get("/summary")
 async def get_audit_summary(
-    days: int = 7,
+    days: int = Query(7, ge=1, le=365),
     _admin: Dict[str, Any] = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
 ):
+    period_start = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    action_counts = (
+        db.query(AuditLogModel.action, func.count(AuditLogModel.id))
+        .filter(AuditLogModel.timestamp >= period_start)
+        .group_by(AuditLogModel.action)
+        .all()
+    )
+    by_action = {
+        action.value if hasattr(action, "value") else str(action): count
+        for action, count in action_counts
+    }
     return {
         "period_days": days,
-        "total_logs": 0,
-        "by_action": {},
+        "total_logs": sum(by_action.values()),
+        "by_action": by_action,
     }

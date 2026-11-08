@@ -1,6 +1,5 @@
 import ipaddress
 import os
-from functools import lru_cache
 from math import  isfinite
 import httpx
 from base64 import b64decode
@@ -20,6 +19,7 @@ def calculate_risk_score(request):
         request.device_challenge,
     )
     country_risk_score = ip_country_risk(request.ip_address)
+    country_unknown = country_risk_score == 0.5
     network_risk_score = max(
         network_risk(request.ip_address, request.user_agent),
         country_risk_score,
@@ -40,6 +40,7 @@ def calculate_risk_score(request):
         "device": round(device_risk_score, 4),
         "network": round(network_risk_score, 4),
         "ip_country": round(country_risk_score, 4),
+        "ip_country_unknown": float(country_unknown),
         "geolocation": round(geolocation_risk_score, 4),
     }
     risk_score = round(
@@ -140,7 +141,6 @@ TOR_IP_RISK = 1.0
 IPINFO_TOKEN = os.getenv("IPINFO_TOKEN")
 
 
-@lru_cache(maxsize=128)
 def get_ip_info(ip_address):
     """Return IPInfo data when an API token is configured."""
     if not IPINFO_TOKEN:
@@ -184,17 +184,16 @@ def ip_country_risk(ip_address):
     try:
         ip = ipaddress.ip_address(ip_address)
     except (ValueError, TypeError):
-        return 1.0
+        return 0.5
 
     if ip.is_private or ip.is_loopback:
         return 0.0
 
     ip_info = get_ip_info(str(ip))
-    if not ip_info:
-        return 1.0
-
     country = ip_info.get("country")
-    return 1.0 if country and country.upper() != "SG" else 0.0
+    if not isinstance(country, str) or len(country) != 2:
+        return 0.5
+    return 1.0 if country.upper() != "SG" else 0.0
 
 
 def network_risk(ip_address, user_agent):
@@ -205,7 +204,12 @@ def network_risk(ip_address, user_agent):
         return INVALID_IP_RISK
 
     ip_address_text = str(ip)
-    if not get_ip_info(ip_address_text):
+    if ip.is_private or ip.is_loopback:
+        return max(PRIVATE_IP_RISK, VPN_KEYWORD_RISK if any(
+            keyword in (user_agent or "").lower() for keyword in VPN_KEYWORDS
+        ) else 0.0)
+    info = get_ip_info(ip_address_text)
+    if not info:
         return 1.0
 
     risk = 0.0
@@ -217,13 +221,17 @@ def network_risk(ip_address, user_agent):
     if any(keyword in user_agent_lower for keyword in VPN_KEYWORDS):
         risk = max(risk, VPN_KEYWORD_RISK)
 
-    if is_datacenter_ip(ip_address_text):
+    privacy = info.get("privacy") or {}
+    company = info.get("company") or {}
+    if not isinstance(privacy, dict) or not isinstance(company, dict):
+        return 1.0
+    if company.get("type") == "hosting":
         risk = max(risk, DATACENTER_IP_RISK)
-    if is_vpn_ip(ip_address_text):
+    if privacy.get("vpn"):
         risk = max(risk, VPN_IP_RISK)
-    if is_proxy_ip(ip_address_text):
+    if privacy.get("proxy"):
         risk = max(risk, PROXY_IP_RISK)
-    if is_tor_exit_node(ip_address_text):
+    if privacy.get("tor"):
         risk = max(risk, TOR_IP_RISK)
 
     return risk

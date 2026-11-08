@@ -30,7 +30,11 @@ The access token identifies the account, but the current user record in the data
 ### Authentication
 
 #### POST /auth/register
-Register a new user.
+Register a new student. Stage 7 production policy rejects staff/admin self-registration
+with 403. Administrators provision staff through the protected admin API; the first
+administrator is created through the operator-only bootstrap command. The original
+teaching fixture role selection remains available only with explicit isolated test
+settings described in [production identity controls](PRODUCTION-IDENTITY.md).
 
 **Request:**
 ```json
@@ -38,7 +42,7 @@ Register a new user.
   "email": "student@example.com",
   "password": "securepass123",  // min 8 chars
   "full_name": "John Doe",
-  "role": "student"  // student|instructor|ta|admin
+  "role": "student"  // public registration; staff roles require administrator provisioning
 }
 ```
 
@@ -55,6 +59,7 @@ Register a new user.
 ```
 
 **Error Responses:**
+- `403 Forbidden`: Privileged role requested through public registration
 - `400 Bad Request`: Email already registered, password too weak
 - `422 Validation Error`: Invalid email format, missing fields
 

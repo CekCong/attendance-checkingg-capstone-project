@@ -41,6 +41,23 @@ services:
   # Application Services (Students implement these)
   # ==========================================================================
 
+  db-migrate:
+    build:
+      context: ./module2-backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://saiv:saiv_password@postgres:5432/saiv
+      APP_DATABASE_ROLE: saiv_app
+      APP_DATABASE_PASSWORD: "${APP_DATABASE_PASSWORD:-saiv_app_dev_password}"
+    volumes:
+      - ./module2-backend/app:/app/app
+    command: ["python", "-m", "app.migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - saiv-network
+
   backend:
     build:
       context: ./module2-backend
@@ -49,11 +66,20 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://saiv:saiv_password@postgres:5432/saiv
+      DATABASE_URL: postgresql://saiv_app:${APP_DATABASE_PASSWORD:-saiv_app_dev_password}@postgres:5432/saiv
       REDIS_URL: redis://redis:6379
-      REGISTRATION_RATE_LIMIT: "100000"
-      ATTENDANCE_DEMO_MODE: "${ATTENDANCE_DEMO_MODE:-true}"
-      SECRET_KEY: your-secret-key-change-in-production
+      ATTENDANCE_DEMO_MODE: "${ATTENDANCE_DEMO_MODE:-false}"
+      BIOMETRIC_DEMO_MODE: "${BIOMETRIC_DEMO_MODE:-false}"
+      REGISTRATION_RATE_LIMIT: "${REGISTRATION_RATE_LIMIT:-100000}"
+      LOGIN_RATE_LIMIT: "${LOGIN_RATE_LIMIT:-100000}"
+      API_RATE_LIMIT: "${API_RATE_LIMIT:-1000}"
+      CHECKIN_RATE_LIMIT: "${CHECKIN_RATE_LIMIT:-10}"
+      SAIV_ENV: "${SAIV_ENV:-test}"
+      ALLOW_PRIVILEGED_SELF_REGISTRATION: "true"
+      LEGACY_PUBLIC_TEST_COMPAT: "true"
+      SECRET_KEY: "${SECRET_KEY:-saiv-dev-secret-change-me}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8501}"
       FACE_SERVICE_URL: http://face-recognition:8001
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       WATCHFILES_FORCE_POLLING: "true"
@@ -66,7 +92,17 @@ services:
           path: ./module2-backend/requirements.txt
         - action: rebuild
           path: ./module2-backend/Dockerfile
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
     depends_on:
+      face-recognition:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -83,14 +119,14 @@ services:
       - "8001:8001"
     environment:
       REDIS_URL: redis://redis:6379
-      IPINFO_TOKEN: d6f7dc03defe84
+      IPINFO_TOKEN: "${IPINFO_TOKEN:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
       - ./module3-face-recognition/app:/app/app
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "/app/app"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/ready')"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -111,17 +147,20 @@ services:
     build:
       context: ./module1-frontend
       dockerfile: Dockerfile
+      target: development
       args:
         NEXT_PUBLIC_APP_SURFACE: student
         PORT: "3000"
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000}"
     container_name: saiv-frontend
     ports:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_APP_SURFACE: student
+      APP_ORIGIN: "${FRONTEND_ORIGIN:-}"
       PORT: "3000"
-      BACKEND_URL: http://backend:8000
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      BACKEND_INTERNAL_URL: http://backend:8000
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000}"
       NEXT_PUBLIC_FACE_SERVICE_URL: http://localhost:8001
       WATCHPACK_POLLING: "true"
     volumes:
@@ -143,7 +182,8 @@ services:
         - action: rebuild
           path: ./module1-frontend/Dockerfile
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - saiv-network
 
@@ -151,17 +191,20 @@ services:
     build:
       context: ./module1-frontend
       dockerfile: Dockerfile
+      target: development
       args:
         NEXT_PUBLIC_APP_SURFACE: instructor
         PORT: "8501"
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000}"
     container_name: saiv-dashboard
     ports:
       - "8501:8501"
     environment:
       NEXT_PUBLIC_APP_SURFACE: instructor
+      APP_ORIGIN: "${DASHBOARD_ORIGIN:-}"
       PORT: "8501"
-      BACKEND_URL: http://backend:8000
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      BACKEND_INTERNAL_URL: http://backend:8000
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000}"
       WATCHPACK_POLLING: "true"
     volumes:
       - ./module1-frontend/app:/app/app
@@ -182,7 +225,8 @@ services:
         - action: rebuild
           path: ./module1-frontend/Dockerfile
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - saiv-network
 
@@ -216,6 +260,8 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
+      NO_PROXY: prometheus,localhost,127.0.0.1
+      no_proxy: prometheus,localhost,127.0.0.1
     volumes:
       - grafana_data:/var/lib/grafana
       - ./module4-observability/grafana/provisioning:/etc/grafana/provisioning

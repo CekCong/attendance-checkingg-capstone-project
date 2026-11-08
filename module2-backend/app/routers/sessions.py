@@ -1,10 +1,12 @@
 import uuid
+import secrets
+import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, computed_field
 from sqlalchemy import Column, String, Text, Boolean, Float, DateTime, Enum as SQLEnum, ForeignKey, create_engine, func
-from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship, joinedload
 import enum
 import os
 from dotenv import load_dotenv
@@ -14,26 +16,13 @@ from app.models import CourseModel as Course, SessionModel, EnrollmentModel as C
 from app.database import get_db
 from app.course_access import require_course_staff_access, staff_course_ids
 from app.audit import add_audit_log
+from app.runtime_security import biometric_demo_enabled
 
 # --- Database & Base Setup ---
 load_dotenv()
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://postgres:your_password@localhost:5432/your_database"
-)
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
 Base = declarative_base()
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 # --- Enums & SQLAlchemy Models ---
 
@@ -82,7 +71,7 @@ class SessionCreate(BaseModel):
 
 class SessionUpdate(BaseModel):
     name: Optional[str] = None
-    session_type: Optional[str] = None
+    session_type: Optional[str] = Field(None, pattern="^(lecture|tutorial|lab|exam)$")
     description: Optional[str] = None
     scheduled_start: Optional[datetime] = None
     scheduled_end: Optional[datetime] = None
@@ -159,6 +148,11 @@ class SessionResponse(BaseModel):
     risk_threshold: Optional[float] = None
     qr_code_enabled: bool = False
     created_at: datetime
+
+    @computed_field
+    @property
+    def biometric_demo_mode(self) -> bool:
+        return biometric_demo_enabled()
 
     class Config:
         from_attributes = True
@@ -266,23 +260,22 @@ def list_sessions(
         query = query.filter(SessionModel.scheduled_end > overlap_start)
 
     total = query.count()
-    sessions = query.order_by(SessionModel.scheduled_start, SessionModel.id).offset(offset).limit(limit).all()
+    sessions = query.options(joinedload(SessionModel.course)).order_by(SessionModel.scheduled_start, SessionModel.id).offset(offset).limit(limit).all()
     series_ids = dict(db.query(SessionOccurrenceModel.session_id, SessionOccurrenceModel.series_id)
                       .filter(SessionOccurrenceModel.session_id.in_([s.id for s in sessions])).all())
 
+    course_ids = {s.course_id for s in sessions}
+    session_ids = [s.id for s in sessions]
+    enrolled_counts = dict(db.query(CourseEnrollment.course_id, func.count(CourseEnrollment.id)).filter(
+        CourseEnrollment.course_id.in_(course_ids), CourseEnrollment.is_active.is_(True),
+    ).group_by(CourseEnrollment.course_id).all())
+    checkin_counts = dict(db.query(AttendanceRecord.session_id, func.count(AttendanceRecord.id)).filter(
+        AttendanceRecord.session_id.in_(session_ids),
+    ).group_by(AttendanceRecord.session_id).all())
     items = []
     for s in sessions:
-        total_enrolled = (
-            db.query(func.count(CourseEnrollment.id))
-            .filter(CourseEnrollment.course_id == s.course_id)
-            .scalar() or 0
-        )
-
-        checked_in_count = (
-            db.query(func.count(AttendanceRecord.id))
-            .filter(AttendanceRecord.session_id == s.id)
-            .scalar() or 0
-        )
+        total_enrolled = enrolled_counts.get(s.course_id, 0)
+        checked_in_count = checkin_counts.get(s.id, 0)
 
         items.append(
             SessionListItemResponse(
@@ -350,6 +343,7 @@ def list_my_sessions(
     status_filter: Optional[SessionStatus] = Query(None, alias="status", description="Filter by status"),
     upcoming: bool = Query(False, description="Only show future sessions"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
+    offset: int = Query(0, ge=0),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -382,7 +376,7 @@ def list_my_sessions(
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         query = query.filter(SessionModel.scheduled_start > now)
 
-    sessions = query.limit(limit).all()
+    sessions = query.order_by(SessionModel.scheduled_start.desc(), SessionModel.id).offset(offset).limit(limit).all()
     results = []
     for s in sessions:
         resp = SessionResponse.model_validate(s)
@@ -441,6 +435,28 @@ def update_session(
         )
 
     update_data = payload.model_dump(exclude_unset=True)
+
+    for field_name in ("session_type", "scheduled_start", "scheduled_end", "checkin_opens_at", "checkin_closes_at"):
+        if field_name in update_data and update_data[field_name] is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} cannot be null.",
+            )
+
+    scheduled_start = update_data.get("scheduled_start", session_obj.scheduled_start)
+    scheduled_end = update_data.get("scheduled_end", session_obj.scheduled_end)
+    checkin_opens_at = update_data.get("checkin_opens_at", session_obj.checkin_opens_at)
+    checkin_closes_at = update_data.get("checkin_closes_at", session_obj.checkin_closes_at)
+
+    def comparable(value: datetime) -> datetime:
+        return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+    if "scheduled_start" in update_data and comparable(scheduled_start) <= datetime.now(timezone.utc).replace(tzinfo=None):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="scheduled_start must be in the future.")
+    if comparable(scheduled_end) <= comparable(scheduled_start):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="scheduled_end must be after scheduled_start.")
+    if comparable(checkin_closes_at) <= comparable(checkin_opens_at):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="checkin_closes_at must be after checkin_opens_at.")
 
     if "status" in update_data and update_data["status"] != session_obj.status:
         current_status = session_obj.status
@@ -536,3 +552,31 @@ def delete_session(
     )
     db.delete(session_obj)
     db.commit()
+
+
+@router.post("/{session_id}/qr-code")
+def rotate_session_qr(
+    session_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Enable or rotate a short-lived code; only assigned instructors/admins issue it."""
+    if current_user.get("role") not in {"instructor", "admin"}:
+        raise HTTPException(403, "Instructor or administrator access required")
+    session = db.query(SessionModel).filter_by(id=session_id).with_for_update().first()
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    require_course_staff_access(db, current_user, session.course_id)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if session.status != "active" or not session.checkin_opens_at <= now < session.checkin_closes_at:
+        raise HTTPException(400, "The session check-in window is not open")
+    session.qr_code_secret = secrets.token_urlsafe(24)
+    session.qr_code_expires_at = min(now + timedelta(seconds=90), session.checkin_closes_at)
+    add_audit_log(db, request, "session_updated", details="qr_code_rotated", user_id=str(current_user["id"]),
+                  resource_type="session", resource_id=session.id)
+    payload = {"v": 1, "session_id": session.id, "code": session.qr_code_secret}
+    result = {"code": session.qr_code_secret, "payload": json.dumps(payload, separators=(",", ":")),
+              "expires_at": session.qr_code_expires_at.replace(tzinfo=timezone.utc).isoformat()}
+    db.commit()
+    return result

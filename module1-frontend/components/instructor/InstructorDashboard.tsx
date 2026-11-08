@@ -1,10 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { GlassCard } from "@/components/check-in/GlassCard";
 import {
-  attendanceToCsv,
-  attendanceToJson,
   downloadTextFile,
 } from "@/lib/exportAttendance";
 import type {
@@ -16,7 +14,7 @@ import { AttendancePanel } from "@/components/instructor/AttendancePanel";
 import { CourseManager } from "@/components/instructor/CourseManager";
 import { SessionCalendar } from "@/components/instructor/SessionCalendar";
 import type { Deletion } from "@/components/instructor/DeleteCourseControl";
-import { addDays, localInstant, singaporeDate } from "@/lib/calendar";
+import { addDays, localInstant, parseSessionDate, singaporeDate } from "@/lib/calendar";
 import {
   fetchFlaggedCheckins,
   reviewFlaggedCheckin,
@@ -24,11 +22,20 @@ import {
   fetchCourses,
   fetchCheckins,
   fetchAuditLogs,
+  exportAttendance,
+  type BackendCheckin,
   type BackendCourse,
   type BackendSession,
 } from "@/lib/instructorApi";
 
 const POLL_MS = 30_000;
+function attendanceRecord(checkin: BackendCheckin): AttendanceRecord {
+  return { checkinId: checkin.id, studentId: checkin.student_id,
+    studentName: checkin.student_name, studentEmail: checkin.student_email,
+    sessionId: checkin.session_id, sessionName: checkin.session_name,
+    sessionDate: checkin.checked_in_at.slice(0, 10), status: checkin.status,
+    checkedInAt: checkin.checked_in_at, riskScore: checkin.risk_score };
+}
 
 function formatTime(iso: string) {
   try {
@@ -50,7 +57,7 @@ function statusClass(status: string) {
 }
 
 export function InstructorDashboard() {
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
 
   const [data, setData] = useState<InstructorDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +72,7 @@ export function InstructorDashboard() {
   const [calendarLesson, setCalendarLesson] = useState<BackendSession | null>(null);
   const [calendarRevision, setCalendarRevision] = useState(0);
   const [courses, setCourses] = useState<BackendCourse[]>([]);
+  const [reportSessions, setReportSessions] = useState<BackendSession[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
 
   function handleDeleted({ courseId, lessonId }: Deletion) {
@@ -78,24 +86,58 @@ export function InstructorDashboard() {
     void load();
   }
 
+  const [sessionRecords, setSessionRecords] = useState<AttendanceRecord[]>([]);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const loadGeneration = useRef(0);
+  useEffect(() => {
+    let active = true;
+    setSessionRecords([]);
+    if (!accessToken || selectedSession === "all") { setReportLoading(false); return; }
+    setReportLoading(true);
+    fetchCheckins(accessToken, selectedSession).then((items) => {
+      if (active) setSessionRecords(items.map(attendanceRecord));
+    }).catch((e) => { if (active) setError(e.message); })
+      .finally(() => { if (active) setReportLoading(false); });
+    return () => { active = false; };
+  }, [accessToken, selectedSession, lastFetch]);
+
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
+    if (!accessToken) {
+      setData(null);
+      setCourses([]);
+      setReportSessions([]);
+      return;
+    }
     try {
       const dashboard: InstructorDashboardData = {
-        generatedAt: new Date().toISOString(), todaySessions: [], flagged: [], records: [], auditLogs: [],
-        kpis: { todayCheckins: 0, flaggedPending: 0, approvalRate: 0, liveSessions: 0 },
+        generatedAt: new Date().toISOString(),
+        todaySessions: [],
+        flagged: [],
+        records: [],
+        auditLogs: [],
+        kpis: {
+          todayCheckins: 0,
+          flaggedPending: 0,
+          approvalRate: 0,
+          liveSessions: 0,
+        },
       };
 
       if (accessToken) {
         const [backendFlagged, backendSessions, backendCourses, backendCheckins, backendAuditLogs,] =
           await Promise.all([
             fetchFlaggedCheckins(accessToken),
-            fetchSessions(accessToken, { start: localInstant(singaporeDate()), end: localInstant(addDays(singaporeDate(), 1)) }),
+            fetchSessions(accessToken),
             fetchCourses(accessToken),
             fetchCheckins(accessToken),
             fetchAuditLogs(accessToken),
           ]);
 
-          setCourses(backendCourses);
+          if (generation !== loadGeneration.current) return;
+          setCourses(backendCourses)
+          setReportSessions(backendSessions);
 
         dashboard.flagged = backendFlagged.map((item) => ({
           id: item.id,
@@ -113,7 +155,10 @@ export function InstructorDashboard() {
           checkedInAt: item.checked_in_at,
         }));
 
-        dashboard.todaySessions = backendSessions.map(
+        const start = new Date(localInstant(singaporeDate())).getTime();
+        const end = new Date(localInstant(addDays(singaporeDate(), 1))).getTime();
+        dashboard.todaySessions = backendSessions.filter((session) =>
+          parseSessionDate(session.scheduled_start).getTime() < end && parseSessionDate(session.scheduled_end).getTime() > start).map(
           (session) => ({
             id: session.id,
             title: session.name,
@@ -133,18 +178,7 @@ export function InstructorDashboard() {
           }),
         );
 
-        dashboard.records = backendCheckins.map((checkin) => ({
-          checkinId: checkin.id,
-          studentId: checkin.student_id,
-          studentName: checkin.student_name,
-          studentEmail: checkin.student_email,
-          sessionId: checkin.session_id,
-          sessionName: checkin.session_name,
-          sessionDate: checkin.checked_in_at.slice(0, 10),
-          status: checkin.status,
-          checkedInAt: checkin.checked_in_at,
-          riskScore: checkin.risk_score,
-        }));
+        dashboard.records = backendCheckins.map(attendanceRecord);
 
         dashboard.auditLogs = backendAuditLogs.map((log) => ({
           id: log.id,
@@ -204,11 +238,7 @@ export function InstructorDashboard() {
     return showAllFlagged ? data.flagged : data.flagged.slice(0, 3);
   }, [data, showAllFlagged]);
 
-  const filteredRecords = useMemo(() => {
-    if (!data) return [];
-    if (selectedSession === "all") return data.records;
-    return data.records.filter((row) => row.sessionId === selectedSession);
-  }, [data, selectedSession]);
+  const filteredRecords = selectedSession === "all" ? data?.records ?? [] : sessionRecords;
 
   const auditActions = useMemo(() => {
     if (!data) return [];
@@ -270,18 +300,16 @@ export function InstructorDashboard() {
     };
   }, [data]);
 
-  function exportRecords(format: "csv" | "json") {
-    const stamp = new Date().toISOString().slice(0, 10);
-    if (format === "csv") {
-      downloadTextFile(`attendance-${stamp}.csv`, attendanceToCsv(filteredRecords), "text/csv;charset=utf-8");
-      return;
-    }
-    downloadTextFile(
-      `attendance-${stamp}.json`,
-      JSON.stringify(attendanceToJson(filteredRecords), null, 2),
-      "application/json",
-    );
-  };
+  async function exportRecords(format: "csv" | "json") {
+    if (!accessToken) return;
+    setExporting(true);
+    try {
+      const contents = await exportAttendance(accessToken, format, selectedSession);
+      downloadTextFile(`attendance.${format}`, contents, format === "csv" ? "text/csv;charset=utf-8" : "application/json");
+      await load();
+    } catch (error) { setError(error instanceof Error ? error.message : "Export failed"); }
+    finally { setExporting(false); }
+  }
 
   async function reviewCheckin(
     checkinId: string,
@@ -346,14 +374,15 @@ export function InstructorDashboard() {
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(320px,1fr)]">
       <div className="min-w-0 space-y-4 lg:sticky lg:top-4">
       <details className="rounded-2xl border border-white/20 bg-white/10">
-      <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-white">Courses & semesters</summary>
+      <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-white">Courses, students & semesters</summary>
       <CourseManager
         accessToken={accessToken}
+        canAddCourse={user?.role === "instructor"}
         courses={courses}
         selectedCourseId={selectedCourseId}
         onDeleted={handleDeleted}
         onSelect={setSelectedCourseId}
-        onCreated={(course) => {
+        onAdded={(course) => {
           setCourses((current) => [course, ...current.filter((item) => item.id !== course.id)]);
           setSelectedCourseId(course.id);
         }}
@@ -590,10 +619,10 @@ export function InstructorDashboard() {
           })}
         </div>
       </GlassCard>
+      <GlassCard>
       <details className="group">
-        <summary className="cursor-pointer list-none">
-          <GlassCard className="p-5">
-            <div className="flex items-center justify-between">
+        <summary className="cursor-pointer list-none p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-white sm:p-6 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center justify-between gap-4">
               <div>
                 <h2 className="font-display text-xl font-semibold text-white">
                   Attendance records & export
@@ -605,35 +634,37 @@ export function InstructorDashboard() {
               <span className="text-sm text-white/60 group-open:hidden">Show</span>
               <span className="hidden text-sm text-white/60 group-open:inline">Hide</span>
             </div>
-          </GlassCard>
         </summary>
-        <GlassCard className="mt-3 p-5 sm:p-6">
+        <div className="border-t border-white/15 p-5 sm:p-6">
           <div className="flex flex-wrap items-center gap-3">
             <label className="text-sm text-white/80">
               Session
               <select
+                aria-label="Attendance session"
                 value={selectedSession}
                 onChange={(e) => setSelectedSession(e.target.value)}
                 className="ml-2 rounded-xl border border-white/25 bg-sky-950/80 px-3 py-2 text-white"
               >
-                <option value="all">All today</option>
-                {(data?.todaySessions ?? []).map((session) => (
+                <option value="all">All today (Singapore)</option>
+                {reportSessions.map((session) => (
                   <option key={session.id} value={session.id}>
-                    {session.title}
+                    {session.name}
                   </option>
                 ))}
               </select>
             </label>
             <button
               type="button"
-              onClick={() => exportRecords("csv")}
+              disabled={exporting}
+              onClick={() => void exportRecords("csv")}
               className="rounded-xl bg-white/90 px-4 py-2 text-sm font-semibold text-sky-950"
             >
               Export CSV
             </button>
             <button
               type="button"
-              onClick={() => exportRecords("json")}
+              disabled={exporting}
+              onClick={() => void exportRecords("json")}
               className="rounded-xl border border-white/30 px-4 py-2 text-sm font-semibold text-white"
             >
               Export JSON
@@ -648,15 +679,16 @@ export function InstructorDashboard() {
           </div>
           {showRecords && (
             <div className="mt-4 overflow-x-auto">
-              <RecordsTable records={filteredRecords} />
+              {reportLoading ? <p>Loading report…</p> : <RecordsTable records={filteredRecords} />}
             </div>
           )}
-        </GlassCard>
+        </div>
       </details>
+      </GlassCard>
+      <GlassCard>
       <details className="group">
-        <summary className="cursor-pointer list-none">
-          <GlassCard className="p-5">
-            <div className="flex items-center justify-between">
+        <summary className="cursor-pointer list-none p-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-white sm:p-6 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center justify-between gap-4">
               <div>
                 <h2 className="font-display text-xl font-semibold text-white">
                   Audit log explorer
@@ -674,10 +706,9 @@ export function InstructorDashboard() {
                 Hide
               </span>
             </div>
-          </GlassCard>
         </summary>
 
-        <GlassCard className="mt-3 p-5 sm:p-6">
+        <div className="border-t border-white/15 p-5 sm:p-6">
 
           <div className="flex flex-wrap gap-3">
 
@@ -775,8 +806,9 @@ export function InstructorDashboard() {
             )}
           </div>
 
-        </GlassCard>
+        </div>
       </details>
+      </GlassCard>
       </aside>
       </div>
     </div>

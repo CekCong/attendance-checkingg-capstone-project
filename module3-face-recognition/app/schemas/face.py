@@ -4,7 +4,17 @@
 
 from typing import Any, Dict
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class CameraReadinessRequest(BaseModel):
+    image: str = Field(..., min_length=1, max_length=2_000_000)
+
+
+class CameraReadinessResponse(BaseModel):
+    ready: bool
+    message: str
+    warnings: list[str] = Field(default_factory=list)
 
 class FaceEnrollRequest(BaseModel):
     """Request model for face enrollment."""

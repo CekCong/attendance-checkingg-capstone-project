@@ -24,6 +24,10 @@ INSTRUCTOR_OR_ADMIN = require_roles("instructor", "admin")
 STAFF = require_roles("ta", "instructor", "admin")
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _scoped_course_ids(db: Session, user: Dict[str, Any]) -> Optional[list[str]]:
     if user.get("role") == "admin":
         return None
@@ -86,8 +90,9 @@ def stats_overview(
         courses_query = courses_query.filter(CourseModel.id.in_(scoped_course_ids))
         checkins_query = checkins_query.filter(SessionModel.course_id.in_(scoped_course_ids))
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    now = _utc_now()
+    # Calendar-day reports use Singapore time; persisted timestamps are UTC.
+    today_start = (now + timedelta(hours=8)).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=8)
     week_start = today_start - timedelta(days=6)
     trend_start = today_start - timedelta(days=days - 1)
 
@@ -156,14 +161,17 @@ def stats_overview(
         else 0.0
     )
 
+    report_day = (func.date(CheckinModel.checked_in_at, "+8 hours")
+                  if db.get_bind().dialect.name == "sqlite"
+                  else func.date(CheckinModel.checked_in_at + timedelta(hours=8)))
     daily_rows = (
         checkins_query.filter(CheckinModel.checked_in_at >= trend_start)
         .with_entities(
-            func.date(CheckinModel.checked_in_at),
+            report_day,
             CheckinModel.status,
             func.count(CheckinModel.id),
         )
-        .group_by(func.date(CheckinModel.checked_in_at), CheckinModel.status)
+        .group_by(report_day, CheckinModel.status)
         .all()
     )
     daily_totals: dict[str, int] = {}
@@ -176,22 +184,22 @@ def stats_overview(
 
     trends = [
         {
-            "date": (today_start - timedelta(days=delta)).date().isoformat(),
+            "date": (today_start + timedelta(hours=8) - timedelta(days=delta)).date().isoformat(),
             "count": daily_totals.get(
-                (today_start - timedelta(days=delta)).date().isoformat(), 0
+                (today_start + timedelta(hours=8) - timedelta(days=delta)).date().isoformat(), 0
             ),
             "rate": (
                 round(
                     daily_approved.get(
-                        (today_start - timedelta(days=delta)).date().isoformat(), 0
+                        (today_start + timedelta(hours=8) - timedelta(days=delta)).date().isoformat(), 0
                     )
                     / daily_totals[
-                        (today_start - timedelta(days=delta)).date().isoformat()
+                        (today_start + timedelta(hours=8) - timedelta(days=delta)).date().isoformat()
                     ],
                     2,
                 )
                 if daily_totals.get(
-                    (today_start - timedelta(days=delta)).date().isoformat(), 0
+                    (today_start + timedelta(hours=8) - timedelta(days=delta)).date().isoformat(), 0
                 )
                 else 0.0
             ),
@@ -451,13 +459,11 @@ def stats_student(
         .all()
     )
     course_ids = [enrollment.course_id for enrollment in enrollments]
-    if user.get("role") != "admin" and not set(course_ids).intersection(
-        staff_course_ids(db, user)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Student is not enrolled in your courses.",
-        )
+    if user.get("role") != "admin":
+        allowed = set(staff_course_ids(db, user))
+        course_ids = [course_id for course_id in course_ids if course_id in allowed]
+        if not course_ids:
+            raise HTTPException(403, "Access denied. Student is not enrolled in your courses.")
 
     sessions = (
         db.query(SessionModel)
@@ -542,7 +548,7 @@ def stats_student(
         "student_id": student.id,
         "student_name": student.full_name,
         "student_email": student.email,
-        "total_enrolled_courses": len(enrollments),
+        "total_enrolled_courses": len(course_ids),
         "total_sessions": len(sessions),
         "attended_sessions": len(attended),
         "attendance_rate": round(len(attended) / len(sessions), 2) if sessions else 0.0,

@@ -10,6 +10,8 @@ from app.api.liveness import router as liveness_router
 from app.api.risk import router as risk_router
 from app.api.health import router as health_router
 from app.services.arc_face import get_arcface_model
+from app.services.mediapipe_tasks import get_tasks, close_tasks
+from app.metrics import observe, metrics
 
 SERVICE_TITLE = "SAIV Face Recognition Service"
 SERVICE_DESCRIPTION = "Face enrollment, verification, liveness detection, and risk scoring service"
@@ -21,7 +23,11 @@ DEFAULT_CORS_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
 async def lifespan(app: FastAPI):
     """Load ArcFace before reporting the service as ready."""
     get_arcface_model()
-    yield
+    get_tasks()
+    try:
+        yield
+    finally:
+        close_tasks()
 
 app = FastAPI(
     title=SERVICE_TITLE,
@@ -86,3 +92,6 @@ app.include_router(health_router)
 app.include_router(face_router)
 app.include_router(liveness_router)
 app.include_router(risk_router)
+
+app.middleware("http")(observe)
+app.add_api_route("/metrics", metrics, include_in_schema=False)

@@ -1,5 +1,5 @@
 export const AUTH_BACKEND_URL =
-  process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  process.env.BACKEND_INTERNAL_URL ?? process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export function authErrorMessage(detail: unknown, fallback: string): string {
   if (typeof detail === "string") return detail;

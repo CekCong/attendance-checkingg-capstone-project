@@ -11,7 +11,9 @@ export function captureFrameAsBase64(
   const height = video.videoHeight;
 
   if (!width || !height) {
-    throw new Error("Camera stream is not ready. Please wait a moment and try again.");
+    throw new Error(
+      "Camera stream is not ready. Please wait a moment and try again.",
+    );
   }
 
   canvas.width = width;
@@ -22,12 +24,8 @@ export function captureFrameAsBase64(
     throw new Error("Unable to allocate a drawing context for frame capture.");
   }
 
-  // Mirror to match the selfie preview orientation.
-  ctx.save();
-  ctx.translate(width, 0);
-  ctx.scale(-1, 1);
+  // Mirror only the preview, not the image submitted to the recognition model.
   ctx.drawImage(video, 0, 0, width, height);
-  ctx.restore();
 
   const dataUrl = canvas.toDataURL("image/jpeg", quality);
 

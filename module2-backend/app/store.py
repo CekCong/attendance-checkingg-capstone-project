@@ -31,6 +31,7 @@ def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "id": user["id"],
         "email": user["email"],
         "full_name": user["full_name"],
+        "matriculation_number": user.get("matriculation_number"),
         "role": user["role"],
         "is_active": user["is_active"],
         "camera_consent": user.get("camera_consent", False),

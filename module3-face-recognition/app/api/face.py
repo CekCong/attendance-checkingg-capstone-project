@@ -7,6 +7,8 @@ from app.services.face_detector import detect_face
 from app.services.face_quality import calculate_quality_score
 from app.services.similarity import hamming_distance
 from app.services.sim_hash import SIMHASH_BITS
+from app.schemas.face import CameraReadinessRequest, CameraReadinessResponse
+from app.services.camera_readiness import camera_readiness
 
 router = APIRouter(tags=["Face"])
 
@@ -14,12 +16,21 @@ FACE_DETECTION_THRESHOLD = 0.70
 FACE_QUALITY_THRESHOLD = 0.50
 FACE_MATCH_THRESHOLD = 0.70
 
+
+@router.post("/face/readiness", response_model=CameraReadinessResponse)
+def check_camera_readiness(request: CameraReadinessRequest):
+    try:
+        image = decode_base64_image(request.image)
+    except ValueError as exc:
+        raise HTTPException(400, "The camera image could not be read. Please try again.") from exc
+    return camera_readiness(image)
+
 # =============================================================================
 # FACE ENROLLMENT ENDPOINT (REQUIRED - 4 points in public tests)
 # =============================================================================
 
 @router.post("/face/enroll", response_model=FaceEnrollResponse, status_code=201)
-async def enroll_face(request: FaceEnrollRequest):
+def enroll_face(request: FaceEnrollRequest):
     """
     Enroll a user's face for future verification.
     Takes in a base64 image, user ID, and camera consent, returns a hash of the face template.
@@ -86,7 +97,7 @@ async def enroll_face(request: FaceEnrollRequest):
 # =============================================================================
 
 @router.post("/face/verify", response_model=FaceVerifyResponse)
-async def verify_face(request: FaceVerifyRequest):
+def verify_face(request: FaceVerifyRequest):
     """
     Verify a face against an enrolled template.
     Takes in a base64 image and a reference hash, returns match score and pass/fail.
@@ -156,9 +167,9 @@ async def verify_face(request: FaceVerifyRequest):
 
 
 @router.post("/face/match")
-async def match_face(request: FaceVerifyRequest):
+def match_face(request: FaceVerifyRequest):
     """
     Legacy face matching endpoint. Redirects to /face/verify.
     Kept for backwards compatibility.
     """
-    return await verify_face(request)
+    return verify_face(request)

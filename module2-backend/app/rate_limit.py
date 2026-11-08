@@ -1,24 +1,23 @@
-"""Redis-based rate limiting with an in-memory fallback for local UI work."""
+"""Shared Redis rate limits; optional memory fallback for isolated development."""
 
 from __future__ import annotations
 
 import os
 import time
 from typing import Tuple
+from fastapi import HTTPException
 
-LOGIN_LIMIT = 100000
+LOGIN_LIMIT = int(os.getenv("LOGIN_RATE_LIMIT", "60"))
 LOGIN_WINDOW_SECONDS = 3600
 
 _memory_hits: dict[str, list[float]] = {}
 _redis = None
-_redis_checked = False
 
 
 def _get_redis():
-    global _redis, _redis_checked
-    if _redis_checked:
+    global _redis
+    if _redis is not None:
         return _redis
-    _redis_checked = True
     try:
         import redis as redis_lib
 
@@ -55,20 +54,25 @@ def check_rate_limit(key: str, limit: int, window: int) -> Tuple[bool, int]:
     """
     Return (allowed, remaining). Increments the counter when allowed.
     """
+    key = os.getenv("RATE_LIMIT_PREFIX", "saiv:rate-limit:") + key
     client = _get_redis()
     if client is not None:
         try:
-            current = client.incr(key)
-            if current == 1:
-                client.expire(key, window)
-            ttl = client.ttl(key)
-            if ttl < 0:
-                client.expire(key, window)
+            current = int(client.eval("""
+                local count = redis.call('INCR', KEYS[1])
+                if redis.call('TTL', KEYS[1]) < 0 then
+                    redis.call('EXPIRE', KEYS[1], ARGV[1])
+                end
+                return count
+            """, 1, key, window))
             if current > limit:
                 return False, 0
             return True, max(0, limit - current)
         except Exception:
             pass
+
+    if os.getenv("RATE_LIMIT_ALLOW_MEMORY", "false").lower() != "true":
+        raise HTTPException(status_code=503, detail="Rate limit service unavailable")
 
     now = time.time()
     hits = [t for t in _memory_hits.get(key, []) if now - t < window]
@@ -81,12 +85,23 @@ def check_rate_limit(key: str, limit: int, window: int) -> Tuple[bool, int]:
 
 
 def client_ip(request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        forwarded_ip = forwarded_for.split(",", 1)[0].strip()
+        if forwarded_ip:
+            return forwarded_ip
     return request.client.host if request.client else "unknown"
 
 
 def login_allowed(request) -> Tuple[bool, int]:
     ip = client_ip(request)
     return check_rate_limit(f"rl:login:{ip}", LOGIN_LIMIT, LOGIN_WINDOW_SECONDS)
+
+
+def enforce_rate_limit(key: str, limit: int, window: int) -> None:
+    allowed, remaining = check_rate_limit(key, limit, window)
+    if not allowed:
+        raise HTTPException(
+            status_code=429, detail="Too many requests",
+            headers={"X-RateLimit-Remaining": str(remaining), "Retry-After": str(window)},
+        )

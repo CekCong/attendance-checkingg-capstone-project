@@ -38,9 +38,11 @@ export function ConsentStep({
             className="mt-1 h-4 w-4 accent-emerald-400"
           />
           <span>
-            <span className="block font-semibold text-white">Camera access</span>
+            <span className="block font-semibold text-white">
+              Camera access
+            </span>
             <span className="mt-1 block text-sm text-white/70">
-              Capture a live selfie for server-side liveness verification. No
+              Capture a live selfie stream for a short liveness challenge. No
               photos are kept on this device.
             </span>
           </span>
@@ -58,7 +60,8 @@ export function ConsentStep({
               Geolocation access
             </span>
             <span className="mt-1 block text-sm text-white/70">
-              Read your current location to verify that you are attending from the permitted area.
+              Use your current location to check that you are at the class
+              venue.
             </span>
           </span>
         </label>

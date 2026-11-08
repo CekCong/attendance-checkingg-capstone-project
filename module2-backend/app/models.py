@@ -18,6 +18,8 @@ class UserModel(Base):
     id = Column(String(36), primary_key=True)
     email = Column(String(255), unique=True, nullable=False)
     full_name = Column(String(255), nullable=False)
+    matriculation_number = Column(String(32), nullable=True)
+    __table_args__ = (Index("uq_users_matriculation_number", "matriculation_number", unique=True),)
     hashed_password = Column(String(255), nullable=False)
     
     # Converted ENUM type for roles matching the SQL schema
@@ -29,6 +31,7 @@ class UserModel(Base):
     face_embedding_hash = Column(String(64), nullable=True)
     face_enrolled = Column(Boolean, default=False)
     failed_login_attempts = Column(Integer, nullable=False, default=0)
+    auth_version = Column(Integer, nullable=False, default=0, server_default='0')
     
     # Timestamps
     created_at = Column(DateTime, nullable=False, server_default=func.now())
@@ -82,6 +85,13 @@ class EnrollmentModel(Base):
         # Ensures a student cannot duplicate an active/existing enrollment record for the same course
         UniqueConstraint('student_id', 'course_id', name='uq_student_course_enrollment'),
     )
+
+
+class CourseRosterModel(Base):
+    __tablename__ = "course_rosters"
+    course_id = Column(String(36), ForeignKey("courses.id", ondelete="CASCADE"), primary_key=True)
+    matriculation_number = Column(String(32), primary_key=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 
 class SessionModel(Base):

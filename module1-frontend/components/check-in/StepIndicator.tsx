@@ -2,24 +2,18 @@ import type { WorkflowStep } from "@/lib/types";
 
 const STEPS: { id: WorkflowStep; label: string }[] = [
   { id: "CONSENT", label: "Consent" },
-  { id: "LIVENESS_CHALLENGE", label: "Liveness" },
+  { id: "ENROLLMENT", label: "Enrollment" },
   { id: "GEOLOCATION", label: "Location" },
+  { id: "LIVENESS_CHALLENGE", label: "Liveness" },
   { id: "SUBMITTING", label: "Verify" },
 ];
-
-const ORDER: WorkflowStep[] = [
-  "IDLE",
-  "CONSENT",
-  "LIVENESS_CHALLENGE",
-  "GEOLOCATION",
-  "SUBMITTING",
-  "SUCCESS",
-  "ERROR",
-];
-
 function stepIndex(step: WorkflowStep) {
   if (step === "SUCCESS" || step === "ERROR") return STEPS.length;
-  return Math.max(0, ORDER.indexOf(step) - 1);
+  if (step === "PREPARING") return 0;
+  return Math.max(
+    0,
+    STEPS.findIndex((s) => s.id === step),
+  );
 }
 
 type StepIndicatorProps = {

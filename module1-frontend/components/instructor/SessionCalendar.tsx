@@ -76,7 +76,7 @@ export function SessionCalendar({ accessToken, courses, courseId, onCourseChange
       </div>
       {scheduler && accessToken && <LessonScheduler accessToken={accessToken} courses={courses} courseId={courseId} onCourseChange={onCourseChange}
         onClose={() => setScheduler(false)} onSaved={(day, message) => { setScheduler(false); setAnchor(day); setNotice(message); setRevision((value) => value + 1); onChanged(); }} />}
-      {!courses.length && <p className="border-b border-slate-200 bg-slate-50 px-6 py-3 text-sm text-slate-600">Create a course above to start scheduling your lessons.</p>}
+      {!courses.length && <p className="border-b border-slate-200 bg-slate-50 px-6 py-3 text-sm text-slate-600">Add an existing course above to start scheduling your lessons.</p>}
       {notice && <p role="status" className="border-b border-emerald-100 bg-emerald-50 px-6 py-3 text-sm text-emerald-800">{notice}</p>}
       {error && <div role="alert" className="flex items-center justify-between bg-red-50 px-6 py-3 text-sm text-red-800">{error}<button type="button" className="ml-3 underline" onClick={() => setRevision((value) => value + 1)}>Retry</button></div>}
       <div className="flex justify-between border-b border-slate-100 px-6 py-2 text-xs text-slate-500" aria-live="polite">

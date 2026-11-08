@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { AUTH_BACKEND_URL, authErrorMessage } from "@/lib/authBackend";
 
-export async function POST(request: Request, { params }: { params: { action: string } }) {
+export async function POST(request: Request, { params }: { params: Promise<{ action: string }> }) {
   const routes: Record<string, string> = { resolve: "/attendance/resolve", checkin: "/checkins/" };
-  const path = routes[params.action];
+  const path = routes[(await params).action];
   if (!path) return NextResponse.json({ detail: "Not found" }, { status: 404 });
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) return NextResponse.json({ detail: "Please sign in." }, { status: 401 });

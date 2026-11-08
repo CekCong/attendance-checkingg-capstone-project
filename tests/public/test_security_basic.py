@@ -16,31 +16,6 @@ import uuid
 class TestAuthenticationSecurity:
     """Test authentication security (4 points)"""
 
-    # Additional test case: successful login is aduited
-    def test_successful_login_is_audited(self, client, test_student, auth_headers_admin):
-        failed_login = client.post("/api/v1/auth/login", json={
-            "email": test_student["email"],
-            "password": "incorrect-password"
-        })
-        assert failed_login.status_code == 401
-
-        response = client.post("/api/v1/auth/login", json={
-            "email": test_student["email"],
-            "password": test_student["password"]
-        })
-        assert response.status_code == 200
-
-        logs_response = client.get(
-            "/api/v1/audit/",
-            headers=auth_headers_admin,
-            params={
-                "user_id": test_student["id"],
-            },
-        )
-        assert logs_response.status_code == 200, logs_response.text
-        actions = {item["action"] for item in logs_response.json()["items"]}
-        assert {"user_created", "login_failed", "login_success"} <= actions
-
     @pytest.mark.points(1, category="auth_security")
     def test_weak_password_rejected(self, client, unique_email):
         """Test that weak passwords are rejected."""

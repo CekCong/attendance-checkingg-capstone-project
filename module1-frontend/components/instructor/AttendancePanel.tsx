@@ -7,7 +7,7 @@ import { updateBackendSessionStatus, type BackendSession } from "@/lib/instructo
 import { DeleteCourseControl, type Deletion } from "./DeleteCourseControl";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-type Invitation = { open: boolean; session_id: string; demo_mode?: boolean; reason?: "upcoming" | "ended" | "closed" | "cancelled" | "expired" | "not_open"; passcode?: string; expires_at?: string; join_url?: string; qr_svg?: string };
+type Invitation = { open: boolean; session_id: string; demo_mode?: boolean; biometric_demo_mode?: boolean; reason?: "upcoming" | "ended" | "closed" | "cancelled" | "expired" | "not_open"; passcode?: string; expires_at?: string; join_url?: string; qr_svg?: string };
 type Props = { lesson: BackendSession | null; accessToken: string | null; onChanged: (lesson: BackendSession) => void; onDeleted: (deletion: Deletion) => void };
 
 export function AttendancePanel({ lesson, accessToken, onChanged, onDeleted }: Props) {
@@ -120,6 +120,7 @@ export function AttendancePanel({ lesson, accessToken, onChanged, onDeleted }: P
     {lesson ? <><p className="mt-1 text-sm text-white/80">{lesson.name}</p><p className="mt-1 text-xs text-white/60">{fullDate(parseSessionDate(lesson.scheduled_start))}–{timeLabel(lesson.scheduled_end)} SGT · {lesson.venue_name || "No location"} · {lesson.status}</p></>
       : <p className="mt-3 text-sm text-white/70">Select a lesson in the calendar to show its QR code or passcode here.</p>}
     {demoMode && <p className="mt-3 rounded-xl border border-white/25 bg-white/10 px-3 py-2 text-sm font-medium text-white">Demo mode · Attendance can be opened at any time, including for past or closed lessons.</p>}
+    {invite?.biometric_demo_mode && <p className="mt-3 rounded-xl border border-amber-300/50 bg-amber-300/10 px-3 py-2 text-sm">Biometric demo mode · Face and liveness checks automatically pass. Other attendance checks still apply.</p>}
     <div className="mt-4 flex rounded-xl bg-white/10 p-1">
       {(["qr", "code"] as const).map((item) => <button key={item} type="button" aria-pressed={mode === item} onClick={() => setMode(item)} className={`flex-1 rounded-lg px-3 py-2 text-sm ${mode === item ? "bg-white/90 font-semibold text-sky-950" : "text-white/70"}`}>{item === "qr" ? "QR code" : "Passcode"}</button>)}
     </div>

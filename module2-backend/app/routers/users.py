@@ -1,19 +1,23 @@
 import uuid
 import html
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, StrictBool, field_validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 import enum
 
 from ..database import get_db
 from ..models import EnrollmentModel, UserModel as User
-from ..security import get_current_user, require_roles
+from ..security import get_current_user, require_roles, revoke_user_sessions
+from ..retention import ACCOUNT_RETENTION_DAYS
 from ..course_access import staff_course_ids
 from ..services.face_client import FaceServiceError, enroll_face as enroll_face_with_service
 from ..audit import add_audit_log
+from ..roster import link_matriculation, normalize_matriculation
+from ..services.face_client import check_camera_readiness
+from ..rate_limit import enforce_rate_limit
 
 # --- SQLAlchemy Model ---
 class UserRole(str, enum.Enum):
@@ -28,6 +32,12 @@ class UpdateMeBody(BaseModel):
     full_name: Optional[str] = Field(None, max_length=255)
     camera_consent: Optional[bool] = None
     geolocation_consent: Optional[bool] = None
+    matriculation_number: Optional[str] = None
+
+    @field_validator("matriculation_number")
+    @classmethod
+    def validate_number(cls, value):
+        return normalize_matriculation(value)
 
     @field_validator("full_name")
     @classmethod
@@ -42,6 +52,16 @@ class AdminUpdateUserBody(BaseModel):
 class FaceEnrollBody(BaseModel):
     image: str = Field(..., description="Base64-encoded face image (PNG/JPEG), without data URL prefix")
 
+
+class CameraReadinessBody(BaseModel):
+    image: str = Field(..., min_length=1, max_length=2_000_000)
+
+
+class CameraReadinessResponse(BaseModel):
+    ready: StrictBool
+    message: str
+    warnings: List[str] = Field(default_factory=list)
+
 # Response schema for POST /users/me/face/enroll
 class FaceEnrollResponse(BaseModel):
     success: bool
@@ -53,6 +73,7 @@ class UserResponse(BaseModel):
     id: str
     email: EmailStr
     full_name: str
+    matriculation_number: Optional[str] = None
     role: UserRole
     is_active: bool
     camera_consent: bool
@@ -122,6 +143,30 @@ def get_me(
     return user
 
 
+class DeleteMeBody(BaseModel):
+    current_password: str = Field(min_length=1)
+
+
+@router.delete("/me", status_code=202)
+def schedule_account_deletion(
+    body: DeleteMeBody, request: Request,
+    current_user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    from .auth import verify_password
+    from ..rate_limit import enforce_rate_limit
+    user = db.query(User).filter(User.id == current_user["id"]).one()
+    enforce_rate_limit(f"delete-account:{user.id}", 10, 3600)
+    if not verify_password(body.current_password, user.hashed_password):
+        raise HTTPException(400, "Current password is incorrect")
+    user.scheduled_deletion_at = datetime.utcnow() + timedelta(days=ACCOUNT_RETENTION_DAYS)
+    user.is_active = False
+    revoke_user_sessions(db, user.id)
+    add_audit_log(db, request, "user_updated", user_id=user.id, resource_type="user",
+                  resource_id=user.id, details="Account deletion scheduled")
+    db.commit()
+    return {"scheduled_deletion_at": user.scheduled_deletion_at, "message": "Account disabled; personal data is scheduled for erasure after 30 days."}
+
+
 # PUT /users/me
 @router.put("/me", response_model=UserResponse)
 def update_me(
@@ -135,6 +180,12 @@ def update_me(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    updated_fields = list(update_data)
+    if "matriculation_number" in update_data:
+        link_matriculation(db, request, user, update_data.pop("matriculation_number"))
+    if update_data.get("camera_consent") is False:
+        user.face_embedding_hash = None
+        user.face_enrolled = False
     if "full_name" in update_data and update_data["full_name"]:
         update_data["full_name"] = update_data["full_name"].strip()
 
@@ -144,11 +195,31 @@ def update_me(
     add_audit_log(
         db, request, "user_updated",
         user_id=user.id, resource_type="user", resource_id=user.id,
-        details=f"updated_fields={','.join(update_data.keys())}",
+        details=f"updated_fields={','.join(updated_fields)}",
     )
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/me/face/readiness", response_model=CameraReadinessResponse)
+async def camera_readiness(
+    body: CameraReadinessBody,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == current_user.get("id")).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if not user.camera_consent:
+        raise HTTPException(400, "Camera consent not given")
+    enforce_rate_limit(f"camera-readiness:{user.id}", limit=20, window=60)
+    try:
+        return CameraReadinessResponse(**await check_camera_readiness(body.image))
+    except FaceServiceError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(503, "Camera readiness service returned an invalid response") from exc
 
 
 # POST /users/me/face/enroll
@@ -277,6 +348,10 @@ def update_user_details(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    if update_data.get("is_active") and (user.scheduled_deletion_at is not None or user.hashed_password == "!deleted"):
+        raise HTTPException(409, "Accounts scheduled for deletion or erased cannot be activated.")
+    if update_data.get("is_active") is False:
+        revoke_user_sessions(db, user.id)
     for field, value in update_data.items():
         setattr(user, field, value)
 

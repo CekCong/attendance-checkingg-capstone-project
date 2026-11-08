@@ -106,29 +106,22 @@ from .routers import (
     devices,
     enrollment,
     export,
-    observability,
-    rbac_stubs,
     sessions,
     recurring_sessions,
+    course_rosters,
     attendance_codes,
     stats,
     users,
 )
-from .database import engine, Base, SessionLocal
-from . import models
-from .retention import cleanup_expired_checkins
+from .database import SessionLocal, engine
+from .rate_limit import get_redis_client
+from .admission import DatabaseAdmissionMiddleware
+from .runtime_security import validate_runtime_security
+from .security import SECRET_KEY
+from .retention import cleanup_expired_checkins, cleanup_expired_users
+from .migrate import check_runtime_database
 
 logger = logging.getLogger(__name__)
-
-
-def _ensure_audit_action_values() -> None:
-    if engine.dialect.name != "postgresql":
-        return
-    with engine.begin() as connection:
-        for action in models.AUDIT_ACTION_VALUES:
-            connection.execute(text(
-                f"ALTER TYPE audit_action_enum ADD VALUE IF NOT EXISTS '{action}'"
-            ))
 
 
 async def _retention_cleanup_worker() -> None:
@@ -137,18 +130,19 @@ async def _retention_cleanup_worker() -> None:
         db = SessionLocal()
         try:
             cleanup_expired_checkins(db)
+            cleanup_expired_users(db)
         except Exception:
             db.rollback()
-            logger.exception("Check-in retention cleanup failed")
+            logger.exception("Personal-data retention cleanup failed")
         finally:
             db.close()
         await asyncio.sleep(interval)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- Startup: Initialize database schema ---
-    Base.metadata.create_all(bind=engine)
-    _ensure_audit_action_values()
+    # Validate runtime configuration and database permissions before serving requests.
+    validate_runtime_security(signing_key=SECRET_KEY)
+    check_runtime_database()
     cleanup_task = asyncio.create_task(_retention_cleanup_worker())
     try:
         yield
@@ -183,26 +177,29 @@ async def prometheus_metrics(request: Request, call_next):
         return await call_next(request)
 
     start = time.perf_counter()
+    method = request.method if request.method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"} else "OTHER"
     status = "500"
 
     try:
         response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
         status = str(response.status_code)
         return response
     finally:
         duration = time.perf_counter() - start
 
         route = request.scope.get("route")
-        path = getattr(route, "path", request.url.path)
+        path = getattr(route, "path", "unmatched")
 
         HTTP_REQUESTS.labels(
-            method=request.method,
+            method=method,
             path=path,
             status=status,
         ).inc()
 
         HTTP_REQUEST_DURATION.labels(
-            method=request.method,
+            method=method,
             path=path,
         ).observe(duration)
 
@@ -215,15 +212,20 @@ async def metrics():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8501"],
+    allow_origins=[origin.strip() for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8501"
+    ).split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.add_middleware(DatabaseAdmissionMiddleware)
+
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(courses.router, prefix="/api/v1")
 app.include_router(recurring_sessions.router, prefix="/api/v1")
+app.include_router(course_rosters.router, prefix="/api/v1")
 app.include_router(attendance_codes.router, prefix="/api/v1")
 app.include_router(sessions.router, prefix="/api/v1")
 app.include_router(devices.router, prefix="/api/v1")
@@ -231,11 +233,9 @@ app.include_router(admin.router, prefix="/api/v1")
 app.include_router(enrollment.router, prefix="/api/v1")
 app.include_router(checkins.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
-app.include_router(observability.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(stats.router, prefix="/api/v1")
 app.include_router(export.router, prefix="/api/v1")
-app.include_router(rbac_stubs.router, prefix="/api/v1")
 
 
 
@@ -244,3 +244,17 @@ app.include_router(rbac_stubs.router, prefix="/api/v1")
 async def health_check():
     """Basic health check endpoint."""
     return {"status": "healthy"}
+
+
+@app.get("/ready")
+def readiness(response: Response):
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        client = get_redis_client()
+        if client is None or not client.ping():
+            raise RuntimeError("Redis unavailable")
+    except Exception:
+        response.status_code = 503
+        return {"status": "unavailable"}
+    return {"status": "ready"}

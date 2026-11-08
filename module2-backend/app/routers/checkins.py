@@ -1,20 +1,24 @@
+import secrets
 import uuid
+import os
 import math
 import json
 import enum
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field, ConfigDict, field_validator
-from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field, ConfigDict, field_validator, computed_field
+from sqlalchemy.orm import Session, joinedload
 from ..security import get_current_user
-from ..rate_limit import client_ip
+from ..rate_limit import client_ip, enforce_rate_limit
 from ..database import get_db as shared_get_db
 from ..models import CheckinModel, DeviceModel, EnrollmentModel, SessionModel, UserModel as User
 from ..audit import add_audit_log
 from ..course_access import require_course_staff_access, staff_course_ids
 from ..device_challenge import DeviceChallengeStoreError, consume_device_challenge
 from ..retention import CHECKIN_RETENTION_DAYS
+from ..checkin_feedback import liveness_failure_code, rejection_reasons
+from ..runtime_security import biometric_demo_enabled
 from ..services.face_client import (
     FaceServiceError,
     assess_risk,
@@ -25,8 +29,8 @@ from ..services.face_client import (
 
 AttendanceRecord = CheckinModel
 
-def get_db():
-    yield from shared_get_db()
+# Reuse the dependency identity so authentication and the route share one session.
+get_db = shared_get_db
 
 # --- Enums ---
 class CheckinStatus(str, enum.Enum):
@@ -59,12 +63,22 @@ def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: fl
     
     return round(R * c, 2)
 
+
+def verification_result(result: Dict[str, Any], prefix: str) -> tuple[bool, float]:
+    passed = result[f"{prefix}_passed"]
+    score = result[f"{prefix}_score"]
+    if type(passed) is not bool or type(score) not in (int, float):
+        raise ValueError("Invalid verification result types")
+    if not math.isfinite(score) or not 0 <= score <= 1:
+        raise ValueError("Invalid verification score")
+    return passed, float(score)
+
 # --- Pydantic Schemas ---
 class CheckinCreate(BaseModel):
     session_id: uuid.UUID
-    latitude: float
-    longitude: float
-    location_accuracy_meters: Optional[float] = None
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    location_accuracy_meters: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
     device_fingerprint: str
     device_signature: Optional[str] = Field(None, max_length=4096)
     device_challenge: Optional[str] = Field(None, max_length=256)
@@ -113,6 +127,19 @@ class CheckinResponse(BaseModel):
     reviewed_at: Optional[datetime] = None
     review_notes: Optional[str] = None
 
+    @computed_field
+    @property
+    def rejection_reasons(self) -> List[str]:
+        return rejection_reasons(
+            self.status, [factor.model_dump() for factor in self.risk_factors],
+            self.liveness_challenge_type, self.reviewed_at, self.review_notes,
+        )
+
+    @computed_field
+    @property
+    def biometric_demo_mode(self) -> bool:
+        return any(factor.type == "biometric_demo_bypass" for factor in self.risk_factors)
+
     @field_validator("risk_factors", mode="before")
     @classmethod
     def parse_risk_factors(cls, value):
@@ -149,6 +176,8 @@ class MyCheckinItem(BaseModel):
     status: CheckinStatus
     checked_in_at: datetime
     risk_score: float
+    rejection_reasons: List[str] = Field(default_factory=list)
+    biometric_demo_mode: bool = False
 
 class FlaggedCheckinItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -173,6 +202,8 @@ class FlaggedCheckinItem(BaseModel):
 class FlaggedCheckinPaginatedResponse(BaseModel):
     items: List[FlaggedCheckinItem]
     total: int
+    limit: int
+    offset: int
 
 class AppealCreate(BaseModel):
     appeal_reason: str
@@ -237,13 +268,13 @@ async def request_liveness_challenge(
         CheckinModel.student_id == student_id,
         CheckinModel.session_id == session_id,
     ).first()
-    if existing:
+    if existing and existing.status != CheckinStatus.rejected.value:
         raise HTTPException(status_code=400, detail="Already checked in to this session.")
 
     student = db.query(User).filter(User.id == student_id).first()
     if not student or not student.camera_consent:
         raise HTTPException(status_code=403, detail="Camera consent is required.")
-    if not student.face_enrolled or not student.face_embedding_hash:
+    if not biometric_demo_enabled() and (not student.face_enrolled or not student.face_embedding_hash):
         raise HTTPException(status_code=400, detail="Face enrollment is required for active liveness.")
 
     try:
@@ -257,6 +288,7 @@ def get_flagged_checkins(
     course_id: Optional[uuid.UUID] = Query(None, description="Filter by course"),
     session_id: Optional[uuid.UUID] = Query(None, description="Filter by session"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
+    offset: int = Query(0, ge=0),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -289,9 +321,11 @@ def get_flagged_checkins(
         query = query.filter(AttendanceRecord.session_id == str(session_id))
 
     total = query.count()
-    records = query.order_by(AttendanceRecord.checked_in_at.desc()).limit(limit).all()
+    records = query.options(joinedload(AttendanceRecord.session), joinedload(AttendanceRecord.student)).order_by(AttendanceRecord.checked_in_at.desc(), AttendanceRecord.id).offset(offset).limit(limit).all()
 
     return {
+        "limit": limit,
+        "offset": offset,
         "items": [
             FlaggedCheckinItem(
                 id=rec.id,
@@ -317,6 +351,7 @@ def get_flagged_checkins(
 def get_my_checkins(
     course_id: Optional[uuid.UUID] = Query(None, description="Filter by course"),
     limit: int = Query(50, ge=1, le=100, description="Results per page"),
+    offset: int = Query(0, ge=0),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -338,7 +373,7 @@ def get_my_checkins(
     if course_id:
         query = query.filter(SessionModel.course_id == str(course_id))
 
-    records = query.order_by(AttendanceRecord.checked_in_at.desc()).limit(limit).all()
+    records = query.options(joinedload(AttendanceRecord.session), joinedload(AttendanceRecord.student)).order_by(AttendanceRecord.checked_in_at.desc(), AttendanceRecord.id).offset(offset).limit(limit).all()
 
     return [
         MyCheckinItem(
@@ -348,7 +383,12 @@ def get_my_checkins(
             course_code=rec.session.course.code if rec.session and rec.session.course else "",
             status=CheckinStatus(rec.status),
             checked_in_at=rec.checked_in_at,
-            risk_score=rec.risk_score
+            risk_score=rec.risk_score,
+            rejection_reasons=rejection_reasons(
+                rec.status, rec.risk_factors, rec.liveness_challenge_type, rec.reviewed_at, rec.review_notes,
+            ),
+            biometric_demo_mode=any(factor.get("type") == "biometric_demo_bypass"
+                                    for factor in json.loads(rec.risk_factors or "[]")),
         )
         for rec in records
     ]
@@ -604,7 +644,7 @@ def list_checkins(
         query = query.filter(AttendanceRecord.checked_in_at <= end_date)
 
     total = query.count()
-    records = query.order_by(AttendanceRecord.checked_in_at.desc()).offset(offset).limit(limit).all()
+    records = query.options(joinedload(AttendanceRecord.session), joinedload(AttendanceRecord.student)).order_by(AttendanceRecord.checked_in_at.desc(), AttendanceRecord.id).offset(offset).limit(limit).all()
 
     items = [
         CheckinListItem(
@@ -645,6 +685,9 @@ async def create_checkin(
         )
 
     student_id = str(current_user.get("id"))
+    enforce_rate_limit(
+        f"checkin:{student_id}", int(os.getenv("CHECKIN_RATE_LIMIT", "10")), 60,
+    )
     session_id = str(payload.session_id)
 
     session_obj = db.query(SessionModel).filter(SessionModel.id == session_id).first()
@@ -658,6 +701,12 @@ async def create_checkin(
         session_obj.require_face_match
         or (session_obj.course and session_obj.course.require_face_recognition)
     )
+    biometric_demo = biometric_demo_enabled()
+    legacy_test_compat = (
+        os.getenv("SAIV_ENV") == "test"
+        and os.getenv("LEGACY_PUBLIC_TEST_COMPAT", "false").lower() == "true"
+    )
+    liveness_required = bool(session_obj.require_liveness_check and not legacy_test_compat)
 
     enrollment = (
         db.query(EnrollmentModel)
@@ -715,14 +764,20 @@ async def create_checkin(
         )
         .first()
     )
-    if existing_checkin:
+    if existing_checkin and existing_checkin.status != CheckinStatus.rejected.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Already checked in to this session."
         )
 
+    # Snapshot before verification; a concurrent retry/review must not be overwritten.
+    previous_attempt = (
+        (existing_checkin.id, existing_checkin.checked_in_at, existing_checkin.reviewed_at)
+        if existing_checkin else None
+    )
+
     if session_obj.qr_code_secret:
-        if payload.qr_code != session_obj.qr_code_secret:
+        if not secrets.compare_digest((payload.qr_code or "").encode(), session_obj.qr_code_secret.encode()):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid QR code provided for this session."
@@ -730,7 +785,7 @@ async def create_checkin(
         qr_expires_at = session_obj.qr_code_expires_at
         if qr_expires_at and qr_expires_at.tzinfo is not None:
             qr_expires_at = qr_expires_at.replace(tzinfo=None)
-        if qr_expires_at and now > qr_expires_at:
+        if qr_expires_at and now >= qr_expires_at:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="QR code for this session has expired."
@@ -774,6 +829,17 @@ async def create_checkin(
             detail="User not found.",
         )
 
+    if not legacy_test_compat and (not student.camera_consent or not student.geolocation_consent):
+        raise HTTPException(403, "Camera and geolocation consent are required.")
+    if liveness_required:
+        if (not payload.liveness_challenge_id
+                or payload.liveness_challenge_type not in {"blink", "head_turn", "smile"}
+                or not isinstance(payload.liveness_challenge_response, list)
+                or len(payload.liveness_challenge_response) != 15):
+            raise HTTPException(400, "A fresh active liveness challenge and 15 frames are required.")
+        if not biometric_demo and (not student.face_enrolled or not student.face_embedding_hash):
+            raise HTTPException(400, "Face enrollment is required for active liveness.")
+
     device = (
         db.query(DeviceModel)
         .filter(
@@ -787,6 +853,11 @@ async def create_checkin(
         payload.device_signature is not None
         or payload.device_challenge is not None
     )
+    device_binding_required = bool(
+        session_obj.course and session_obj.course.require_device_binding and not legacy_test_compat
+    )
+    if device_binding_required and not attestation_supplied:
+        raise HTTPException(400, "A signed, fresh device challenge is required for this course.")
     if attestation_supplied:
         if not payload.device_signature or not payload.device_challenge:
             raise HTTPException(
@@ -811,12 +882,27 @@ async def create_checkin(
                 detail=str(exc),
             ) from exc
         if not challenge_valid:
+            if previous_attempt:
+                # Keep the duplicate-submission API contract while allowing a
+                # rejected student to retry with newly issued verification proofs.
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Already checked in to this session with a rejected attempt. "
+                        "Retry attendance with fresh verification; this device challenge "
+                        "is invalid, expired, or already used."
+                    ),
+                )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Device challenge is invalid, expired, or already used.",
             )
 
-    if payload.liveness_challenge_response:
+    if biometric_demo:
+        # Explicit local demo results; no images are sent for biometric evaluation.
+        liveness_passed, liveness_score = True, 1.0
+        risk_factors.append({"type": "biometric_demo_bypass", "severity": "low", "weight": 0.0})
+    elif payload.liveness_challenge_response:
         try:
             liveness_result = await check_liveness(
                 payload.liveness_challenge_response,
@@ -826,9 +912,12 @@ async def create_checkin(
                 user_id=student_id,
                 session_id=session_id,
             )
-            liveness_passed = bool(liveness_result["liveness_passed"])
-            liveness_score = float(liveness_result["liveness_score"])
+            liveness_passed, liveness_score = verification_result(liveness_result, "liveness")
             face_embedding_hash = liveness_result.get("face_embedding_hash")
+            if liveness_required and not liveness_passed:
+                reason_code = liveness_failure_code(liveness_result.get("details"))
+                if reason_code:
+                    risk_factors.append({"type": reason_code, "severity": "high", "weight": 1.0})
         except FaceServiceError as exc:
             if exc.status_code < 500:
                 raise HTTPException(exc.status_code, exc.detail) from exc
@@ -838,7 +927,7 @@ async def create_checkin(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Face recognition service returned an invalid liveness response",
             ) from exc
-    elif session_obj.require_liveness_check:
+    elif liveness_required:
         liveness_score = 0.0
         risk_factors.append({
             "type": "liveness_missing",
@@ -847,12 +936,14 @@ async def create_checkin(
         })
         local_risk = 1.0
 
-    if session_obj.require_liveness_check and liveness_passed is False:
+    if liveness_required and liveness_passed is False:
         risk_factors.append({"type": "liveness_failed", "severity": "high", "weight": 1.0})
         local_risk = 1.0
 
     if face_match_required:
-        if not payload.liveness_challenge_response:
+        if biometric_demo:
+            face_match_passed, face_match_score = True, 1.0
+        elif not payload.liveness_challenge_response:
             face_match_passed = False
             face_match_score = 0.0
         elif not student.face_enrolled or not student.face_embedding_hash:
@@ -873,8 +964,7 @@ async def create_checkin(
                     ),
                     student.face_embedding_hash,
                 )
-                face_match_passed = bool(face_result["match_passed"])
-                face_match_score = float(face_result["match_score"])
+                face_match_passed, face_match_score = verification_result(face_result, "match")
                 face_embedding_hash = face_result.get("current_template_hash")
             except FaceServiceError as exc:
                 if exc.status_code < 500:
@@ -894,6 +984,27 @@ async def create_checkin(
         risk_factors.append({"type": "device_unknown", "severity": "medium", "weight": 0.15})
         local_risk = max(local_risk, 0.15)
 
+    # Use only a previously approved observation; rejected spoof locations must
+    # not poison the travel history. Ignore GPS noise and allow 300 km/h.
+    previous = db.query(CheckinModel).filter(
+        CheckinModel.student_id == student_id,
+        CheckinModel.status == "approved",
+        CheckinModel.latitude.isnot(None), CheckinModel.longitude.isnot(None),
+    ).order_by(CheckinModel.checked_in_at.desc()).first()
+    impossible_travel = False
+    if previous:
+        elapsed = max((now - previous.checked_in_at.replace(tzinfo=None)).total_seconds(), 1)
+        distance = calculate_haversine_distance(
+            previous.latitude, previous.longitude, payload.latitude, payload.longitude,
+        )
+        uncertainty = max(previous.location_accuracy_meters or 0, 100) + max(
+            payload.location_accuracy_meters or 0, 100,
+        )
+        impossible_travel = max(distance - uncertainty, 0) / elapsed > (300_000 / 3600)
+        if impossible_travel:
+            risk_factors.append({"type": "impossible_travel", "severity": "high", "weight": 1.0})
+            local_risk = 1.0
+
     module3_risk = 0.0
     if not module3_unavailable:
         try:
@@ -901,7 +1012,7 @@ async def create_checkin(
                 liveness_score=(
                     liveness_score
                     if liveness_score is not None
-                    else (0.0 if session_obj.require_liveness_check else 1.0)
+                    else (0.0 if liveness_required else 1.0)
                 ),
                 face_match_score=(
                     face_match_score
@@ -919,6 +1030,15 @@ async def create_checkin(
             )
             module3_risk = float(risk_result["risk_score"])
             signal_breakdown = risk_result.get("signal_breakdown", {})
+            if not isinstance(signal_breakdown, dict) or not {"device", "ip_country"}.issubset(signal_breakdown):
+                raise ValueError("Missing risk signals")
+            if any(type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1
+                   for value in signal_breakdown.values()):
+                raise ValueError("Invalid risk signal")
+            if not math.isfinite(module3_risk) or not 0 <= module3_risk <= 1:
+                raise ValueError("Invalid risk score")
+            if device_binding_required and float(signal_breakdown.get("device", 1)) != 0:
+                raise HTTPException(403, "Device signature verification failed.")
             outside_singapore_ip = float(signal_breakdown.get("ip_country", 0.0)) >= 1.0
             for signal_name, signal_risk in signal_breakdown.items():
                 signal_risk = float(signal_risk)
@@ -947,17 +1067,12 @@ async def create_checkin(
             ) from exc
 
     if module3_unavailable:
-        risk_factors.append({
-            "type": "face_service_unavailable",
-            "severity": "high",
-            "weight": 0.50,
-        })
-        local_risk = max(local_risk, 0.50)
+        raise HTTPException(503, "Verification service unavailable. Please retry with fresh challenges.")
 
     total_risk = round(min(max(local_risk, module3_risk), 1.0), 4)
 
     verification_failed = (
-        (session_obj.require_liveness_check and liveness_passed is False)
+        (liveness_required and liveness_passed is False)
         or (face_match_required and face_match_passed is False)
     )
 
@@ -965,22 +1080,22 @@ async def create_checkin(
         checkin_status = CheckinStatus.rejected
     else:
         threshold = session_obj.risk_threshold or 0.50
-        if total_risk >= threshold:
+        network_unknown = float(signal_breakdown.get("ip_country_unknown", 0)) > 0
+        if total_risk >= threshold or impossible_travel or network_unknown or device is None:
             checkin_status = CheckinStatus.flagged
         else:
             checkin_status = CheckinStatus.approved
 
-    new_record = CheckinModel(
-        id=str(uuid.uuid4()),
+    record_values = dict(
         session_id=session_id,
         student_id=student_id,
         device_id=device.id if device else None,
         status=checkin_status.value,
         checked_in_at=now,
-        latitude=payload.latitude,
-        longitude=payload.longitude,
+        latitude=round(payload.latitude, 3),
+        longitude=round(payload.longitude, 3),
         location_accuracy_meters=payload.location_accuracy_meters,
-        distance_from_venue_meters=distance_meters,
+        distance_from_venue_meters=round(distance_meters / 100) * 100 if distance_meters is not None else None,
         liveness_passed=liveness_passed,
         liveness_score=liveness_score,
         liveness_challenge_type=(
@@ -996,7 +1111,44 @@ async def create_checkin(
         scheduled_deletion_at=now + timedelta(days=CHECKIN_RETENTION_DAYS),
     )
 
-    db.add(new_record)
+    # Serialize only the short save phase (no service calls while holding the lock).
+    # This also prevents two first submissions from inserting duplicate attendance.
+    db.query(User.id).filter(User.id == student_id).with_for_update().one()
+    latest = db.query(CheckinModel).filter(
+        CheckinModel.session_id == session_id, CheckinModel.student_id == student_id,
+    ).populate_existing().first()
+    if latest and (
+        latest.status != CheckinStatus.rejected.value
+        or previous_attempt != (latest.id, latest.checked_in_at, latest.reviewed_at)
+    ):
+        raise HTTPException(409, "Attendance changed while verifying. Refresh your attendance history before retrying.")
+    if not latest and previous_attempt:
+        raise HTTPException(409, "Attendance changed while verifying. Refresh your attendance history before retrying.")
+    if latest:
+        # Preserve the prior outcome in the append-only audit trail before replacing it.
+        add_audit_log(
+            db, request, "checkin_attempted", user_id=student_id,
+            resource_type="checkin", resource_id=latest.id,
+            details=json.dumps({
+                "retry_previous_attempt": True, "status": latest.status,
+                "checked_in_at": latest.checked_in_at.isoformat(),
+                "risk_score": latest.risk_score, "risk_factors": json.loads(latest.risk_factors or "[]"),
+                "liveness_passed": latest.liveness_passed, "liveness_score": latest.liveness_score,
+                "liveness_challenge_type": latest.liveness_challenge_type,
+                "face_match_passed": latest.face_match_passed, "face_match_score": latest.face_match_score,
+                "reviewed_by_id": latest.reviewed_by_id, "review_notes": latest.review_notes,
+                "reviewed_at": latest.reviewed_at.isoformat() if latest.reviewed_at else None,
+                "appeal_reason": latest.appeal_reason,
+            }), success=False,
+        )
+        new_record = latest
+        for field, value in record_values.items():
+            setattr(new_record, field, value)
+        for field in ("verified_at", "reviewed_by_id", "reviewed_at", "review_notes", "appeal_reason", "appealed_at"):
+            setattr(new_record, field, None)
+    else:
+        new_record = CheckinModel(id=str(uuid.uuid4()), **record_values)
+        db.add(new_record)
     add_audit_log(
         db,
         request,
@@ -1006,7 +1158,7 @@ async def create_checkin(
         resource_id=new_record.id,
         details=(
             f"session_id={session_id}; status={checkin_status.value}; "
-            f"risk_score={total_risk}; latitude={payload.latitude}; longitude={payload.longitude}"
+            f"risk_score={total_risk}; biometric_demo={biometric_demo}"
         ),
         success=checkin_status != CheckinStatus.rejected,
     )

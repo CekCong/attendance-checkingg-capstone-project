@@ -5,6 +5,7 @@ export type AuthUser = {
   email: string;
   username: string;
   full_name: string;
+  matriculation_number?: string | null;
   role: UserRole;
   language: string;
 };
