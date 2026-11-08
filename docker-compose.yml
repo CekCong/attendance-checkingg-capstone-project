@@ -68,7 +68,7 @@ services:
     environment:
       DATABASE_URL: postgresql://saiv_app:${APP_DATABASE_PASSWORD:-saiv_app_dev_password}@postgres:5432/saiv
       REDIS_URL: redis://redis:6379
-      ATTENDANCE_DEMO_MODE: "${ATTENDANCE_DEMO_MODE:-true}"
+      ATTENDANCE_DEMO_MODE: "${ATTENDANCE_DEMO_MODE:-false}"
       BIOMETRIC_DEMO_MODE: "${BIOMETRIC_DEMO_MODE:-false}"
       REGISTRATION_RATE_LIMIT: "${REGISTRATION_RATE_LIMIT:-100000}"
       LOGIN_RATE_LIMIT: "${LOGIN_RATE_LIMIT:-100000}"
