@@ -188,7 +188,7 @@ def list_courses(
     }
 
 
-# POST /courses/ - Create a new course (Admin only)
+# POST /courses/ - Only administrators create catalog entries.
 @router.post("/", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)
 def create_course(
     payload: CourseCreate,
@@ -196,7 +196,7 @@ def create_course(
     db: Session = Depends(get_db)
 ):
     """
-    Create a course. Requires administrator role.
+    Create a course. Instructors can only assign new courses to themselves.
     """
     existing = db.query(Course).filter(Course.code == payload.code).first()
     if existing:
@@ -206,11 +206,6 @@ def create_course(
         )
 
     instructor_id = payload.instructor_id
-    if current_user["role"] == "instructor":
-        if instructor_id and instructor_id != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Tutors can only create courses assigned to themselves.")
-        instructor_id = current_user["id"]
-
     # Verify instructor exists if provided
     if instructor_id:
         instructor = db.query(User).filter(User.id == instructor_id).first()
@@ -249,6 +244,75 @@ def create_course(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to create course: {str(e)}"
         )
+
+
+class AvailableCourseResponse(BaseModel):
+    id: str
+    code: str
+    name: str
+    semester: str
+
+    class Config:
+        from_attributes = True
+
+
+class AvailableCoursesResponse(BaseModel):
+    items: List[AvailableCourseResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+@router.get("/available", response_model=AvailableCoursesResponse)
+def available_courses(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    _current_user: Dict[str, Any] = Depends(require_roles("instructor")),
+    db: Session = Depends(get_db),
+):
+    # Legacy courses can be assigned through lessons without an explicit mapping.
+    query = db.query(Course).filter(
+        Course.is_active.is_(True),
+        ~Course.id.in_(db.query(CourseInstructorModel.course_id)),
+        ~Course.id.in_(db.query(SessionModel.course_id).filter(SessionModel.instructor_id.isnot(None))),
+    )
+    return {
+        "items": query.order_by(Course.code, Course.id).offset(offset).limit(limit).all(),
+        "total": query.count(), "limit": limit, "offset": offset,
+    }
+
+
+@router.post("/{course_id}/assignment", response_model=CourseResponse)
+def add_existing_course(
+    course_id: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(require_roles("instructor")),
+    db: Session = Depends(get_db),
+):
+    # Serialize competing selections so one tutor cannot replace another's assignment.
+    course = db.query(Course).filter(Course.id == course_id).with_for_update().first()
+    if not course:
+        raise HTTPException(404, "Course not found.")
+    if not course.is_active:
+        raise HTTPException(400, "This course is archived and cannot be added.")
+    instructor_id = str(current_user["id"])
+    assignment = db.get(CourseInstructorModel, course.id)
+    other_lesson = db.query(SessionModel.id).filter(
+        SessionModel.course_id == course.id,
+        SessionModel.instructor_id != instructor_id,
+    ).first()
+    if (assignment and assignment.instructor_id != instructor_id) or other_lesson:
+        raise HTTPException(409, "This course is already assigned to another instructor. Refresh the available courses.")
+    if not assignment:
+        db.add(CourseInstructorModel(course_id=course.id, instructor_id=instructor_id))
+        add_audit_log(db, request, "user_updated", user_id=instructor_id,
+                      resource_type="course", resource_id=course.id,
+                      details="Instructor added an existing course to their teaching assignments")
+        db.commit()
+        db.refresh(course)
+    result = CourseResponse.model_validate(course)
+    result.instructor_id = instructor_id
+    return result
 
 
 # GET /courses/{course_id} - Course details (Requires auth)

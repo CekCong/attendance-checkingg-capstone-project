@@ -57,7 +57,7 @@ function statusClass(status: string) {
 }
 
 export function InstructorDashboard() {
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
 
   const [data, setData] = useState<InstructorDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -377,11 +377,12 @@ export function InstructorDashboard() {
       <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-white">Courses, students & semesters</summary>
       <CourseManager
         accessToken={accessToken}
+        canAddCourse={user?.role === "instructor"}
         courses={courses}
         selectedCourseId={selectedCourseId}
         onDeleted={handleDeleted}
         onSelect={setSelectedCourseId}
-        onCreated={(course) => {
+        onAdded={(course) => {
           setCourses((current) => [course, ...current.filter((item) => item.id !== course.id)]);
           setSelectedCourseId(course.id);
         }}

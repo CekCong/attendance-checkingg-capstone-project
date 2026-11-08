@@ -882,6 +882,17 @@ async def create_checkin(
                 detail=str(exc),
             ) from exc
         if not challenge_valid:
+            if previous_attempt:
+                # Keep the duplicate-submission API contract while allowing a
+                # rejected student to retry with newly issued verification proofs.
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Already checked in to this session with a rejected attempt. "
+                        "Retry attendance with fresh verification; this device challenge "
+                        "is invalid, expired, or already used."
+                    ),
+                )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Device challenge is invalid, expired, or already used.",

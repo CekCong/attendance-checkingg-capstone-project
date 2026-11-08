@@ -249,20 +249,24 @@ export async function deleteCourseOrLesson(accessToken: string, scope: "course" 
 }
 
 
-export async function createBackendCourse(
+export async function fetchAvailableCourses(accessToken: string): Promise<BackendCourse[]> {
+  return fetchAllPages<BackendCourse>("/courses/available", accessToken);
+}
+
+export async function addExistingCourse(
   accessToken: string,
-  payload: { code: string; name: string; semester: string },
+  courseId: string,
 ): Promise<BackendCourse> {
-  const response = await fetch(`${API_BASE}/api/v1/courses/`, {
+  const response = await fetch(`${API_BASE}/api/v1/courses/${encodeURIComponent(courseId)}/assignment`, {
     method: "POST",
     headers: authHeaders(accessToken),
-    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(30_000),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = typeof data.detail === "string"
       ? data.detail
-      : "Unable to create course. Check the course details and try again.";
+      : "Unable to add course. Refresh the available courses and try again.";
     throw new Error(detail);
   }
   return data;
